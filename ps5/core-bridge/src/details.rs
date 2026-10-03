@@ -47,9 +47,10 @@ struct Video<'a> {
     released: Option<String>,
     thumbnail: Option<&'a str>,
     overview: Option<&'a str>,
-    /// Whether the account has watched it, and for the one left part-way how far (0 to 1).
+    /// Whether the account has watched it, and for the one left part-way how far, in
+    /// thousandths.
     watched: bool,
-    progress: Option<f64>,
+    progress: Option<u32>,
 }
 
 /// One add-on's answer for the selected video.
@@ -210,8 +211,8 @@ pub fn details(model: &Ps5Model) -> Option<Details<'_>> {
                                 && library.state.duration > 0
                         })
                         .map(|library| {
-                            (library.state.time_offset as f64 / library.state.duration as f64)
-                                .clamp(0.0, 1.0)
+                            (library.state.time_offset.saturating_mul(1000) / library.state.duration)
+                                .min(1000) as u32
                         }),
                 })
                 .collect(),

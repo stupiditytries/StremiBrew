@@ -66,7 +66,7 @@ bool parse_details(std::string_view json, Details &details)
             episode.watched = source.value("watched", false);
             if (const auto progress = source.find("progress");
                 progress != source.end() && progress->is_number())
-                episode.progress = progress->get<float>();
+                episode.progress = progress->get<float>() / 1000.0f;
             parsed.episodes.push_back(std::move(episode));
         }
 

@@ -67,7 +67,7 @@ bool parse_board(std::string_view json, std::vector<BoardRow> &rows)
                 item.video = text("video");
                 if (const auto progress = source.find("progress");
                     progress != source.end() && progress->is_number())
-                    item.progress = progress->get<float>();
+                    item.progress = progress->get<float>() / 1000.0f;
                 if (const auto genres = source.find("genres");
                     genres != source.end() && genres->is_array())
                     for (const auto &genre : *genres)

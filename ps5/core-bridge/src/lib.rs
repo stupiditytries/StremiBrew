@@ -359,8 +359,9 @@ struct BoardItem<'a> {
     runtime: Option<&'a str>,
     imdb_rating: Option<&'a str>,
     genres: Vec<&'a str>,
-    /// For a title part-way through: how far (0 to 1), and the video it was left in.
-    progress: Option<f64>,
+    /// For a title part-way through: how far, in thousandths (a whole number: the
+    /// console's C library does not read fractions reliably), and the video it was left in.
+    progress: Option<u32>,
     video: Option<&'a str>,
 }
 
@@ -419,7 +420,7 @@ pub extern "C" fn stremio_core_board_rows(
                 runtime: None,
                 imdb_rating: None,
                 genres: vec![],
-                progress: Some((item.progress() / 100.0).clamp(0.0, 1.0)),
+                progress: Some((item.progress() * 10.0).clamp(0.0, 1000.0) as u32),
                 video: item.state.video_id.as_deref(),
             }
         })
