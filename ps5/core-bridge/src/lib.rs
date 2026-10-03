@@ -7,6 +7,7 @@ mod account;
 mod details;
 mod env;
 mod model;
+mod stream_io;
 
 use std::collections::VecDeque;
 use std::ffi::{c_char, CStr};

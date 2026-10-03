@@ -68,6 +68,8 @@ struct Stream<'a> {
     url: Option<&'a str>,
     /// Why a stream without an address cannot be played here.
     unsupported: Option<&'static str>,
+    /// The file's size in bytes, when the add-on gives it.
+    size: Option<u64>,
 }
 
 /// Loads a title's details. `video` selects the video to load streams for: an episode's
@@ -146,6 +148,7 @@ pub fn details(model: &Ps5Model) -> Option<Details<'_>> {
                                 description: stream.description.as_deref(),
                                 url,
                                 unsupported,
+                                size: stream.behavior_hints.video_size,
                             }
                         })
                         .collect(),

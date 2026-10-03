@@ -250,6 +250,16 @@ int main(int argc, char **argv)
                 std::printf("play \"%s\": %s\n", title.c_str(), stream.url.c_str());
             },
         });
+        // A stand-in player: no picture, but the controls behave.
+        static ui::Playback playback;
+        playback = ui::Playback{ui::Playback::State::Playing, 754.0, 2940.0, false, {}};
+        instance.set_player_handler({
+            [](bool paused) {
+                playback.state = paused ? ui::Playback::State::Paused : ui::Playback::State::Playing;
+            },
+            [](double seconds) { playback.position = seconds; },
+            [] {},
+        });
         glfwSetKeyCallback(window, on_key);
 
         const auto frame = [&](float seconds) {
@@ -258,6 +268,9 @@ int main(int argc, char **argv)
             glViewport(0, 0, framebuffer_width, framebuffer_height);
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            if (playback.state == ui::Playback::State::Playing)
+                playback.position += seconds;
+            instance.set_playback(playback);
             instance.update(seconds);
             instance.draw(framebuffer_width, framebuffer_height);
         };

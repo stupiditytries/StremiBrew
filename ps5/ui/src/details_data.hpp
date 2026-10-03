@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,6 +27,7 @@ struct Stream
     std::string description;
     std::string url;         // empty when this app cannot play the stream
     std::string unsupported; // why not, when `url` is empty
+    std::uint64_t size = 0;  // the file's size in bytes, when the add-on says
 };
 
 struct Details

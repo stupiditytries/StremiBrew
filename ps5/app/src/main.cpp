@@ -28,6 +28,7 @@
 #include "core_link.hpp"
 #include "details_data.hpp"
 #include "pad.hpp"
+#include "player.hpp"
 #include "sounds.hpp"
 #include "theme.hpp"
 
@@ -327,6 +328,7 @@ int main()
             }
         });
     });
+    ps5::Player player;
     app.set_title_handler({
         [&core](const std::string &type, const std::string &id) {
             core.post([type, id] { stremio_core_load_details(type.c_str(), id.c_str(), nullptr); });
@@ -337,9 +339,17 @@ int main()
             });
         },
         [] {},
-        [](const ui::Stream &stream, const std::string &title) {
-            // The player is the next thing to be built; for now the choice is recorded.
-            log_line("play requested: \"%s\" from %s", title.c_str(), stream.addon.c_str());
+        [&player](const ui::Stream &stream, const std::string &title) {
+            log_line("playing \"%s\" from %s", title.c_str(), stream.addon.c_str());
+            player.open(stream.url);
+        },
+    });
+    app.set_player_handler({
+        [&player](bool paused) { player.set_paused(paused); },
+        [&player](double seconds) { player.seek(seconds); },
+        [&player] {
+            log_line("player closed");
+            player.close();
         },
     });
 
@@ -389,6 +399,8 @@ int main()
             app.set_account(std::move(account));
         core.set_focused_catalog(app.focused_catalog());
         core.set_title_open(app.title_open());
+        if (app.player_open())
+            app.set_playback(player.status());
 
         const double now = seconds_now();
         const float elapsed = static_cast<float>(now - previous);
@@ -397,6 +409,9 @@ int main()
         const double applied = seconds_now();
 
         canvas.begin();
+        // A playing video's picture goes under the UI, which then draws only its controls.
+        if (app.player_open())
+            player.draw(width, height);
         app.update(elapsed);
         app.draw(width, height);
         const double drawn = seconds_now();

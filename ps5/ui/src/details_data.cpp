@@ -83,6 +83,9 @@ bool parse_details(std::string_view json, Details &details)
                     stream.description = text(source, "description");
                     stream.url = text(source, "url");
                     stream.unsupported = text(source, "unsupported");
+                    if (const auto size = source.find("size");
+                        size != source.end() && size->is_number_unsigned())
+                        stream.size = size->get<std::uint64_t>();
                     parsed.streams.push_back(std::move(stream));
                 }
         }

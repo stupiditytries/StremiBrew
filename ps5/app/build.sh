@@ -15,6 +15,8 @@ export RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo PATH=/root/.cargo/bin:$
 
 sdk=$TEMPLATE/.deps/native/ps5-payload-sdk
 out=$WORK/app
+# FFmpeg's libraries for the console (see ps5/ffmpeg/build.sh).
+ffmpeg=$WORK/ffmpeg-ps5/install
 title_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["titleId"])' \
     "$REPO/ps5/app/sce_sys/param.json")
 mkdir -p "$out/obj" "$out/stubs" "$WORK/bin"
@@ -43,7 +45,7 @@ export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
 ui=$REPO/ps5/ui
 includes=(-I"$ui/src" -I"$ui/third_party/nanovg" -I"$ui/third_party"
     -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp"
-    -I"$GL_SDK/include" -DGL_GLEXT_PROTOTYPES=1)
+    -I"$GL_SDK/include" -I"$ffmpeg/include" -DGL_GLEXT_PROTOTYPES=1)
 common=(-O2 -ffunction-sections -fdata-sections "${includes[@]}")
 sources=("$REPO"/ps5/app/src/*.cpp "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c"
     "$REPO"/ps5/spike-app/src/compat*.c "$REPO/ps5/runtime/heap.c" "$REPO/ps5/runtime/abort.cpp"
@@ -106,6 +108,8 @@ cp "$sdk"/target/lib/*.so "$GL_SDK/lib/libSceAgc.so" "$GL_SDK/lib/libSceAgcDrive
     -e _start -u ps5_agc_gate2_run --error-limit=40 -Map="$out/llvm-pie.map" \
     -o "$out/llvm-pie.elf" "${objects[@]}" \
     --start-group "$out/libstremio_core_ps5.a" -lPS5OpenGL \
+    "$ffmpeg/lib/libavformat.a" "$ffmpeg/lib/libavcodec.a" "$ffmpeg/lib/libswresample.a" \
+    "$ffmpeg/lib/libavutil.a" \
     "$sdk/target/lib/libc++.a" "$sdk/target/lib/libc++abi.a" "$sdk/target/lib/libunwind.a" \
     --end-group \
     --as-needed "$out/stubs/libSceAgc.so" "$out/stubs/libSceAgcDriver.so" \

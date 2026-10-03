@@ -1,7 +1,10 @@
 #include "details_screen.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 
 #include "app.hpp"
 #include "draw_util.hpp"
@@ -82,6 +85,54 @@ std::pair<std::string, std::string> first_line(const std::string &text)
     return {text.substr(0, split), text.substr(split + 1)};
 }
 
+// A stream's file size as the card shows it: what the add-on reports, or else the first
+// size written in its description (which is where most add-ons put it).
+std::string size_text(std::uint64_t bytes, const std::string &description)
+{
+    char text[32];
+    if (bytes > 0)
+    {
+        const double megabytes = static_cast<double>(bytes) / (1024.0 * 1024.0);
+        if (megabytes >= 1024.0)
+            std::snprintf(text, sizeof text, "%.1f GB", megabytes / 1024.0);
+        else
+            std::snprintf(text, sizeof text, "%.0f MB", megabytes);
+        return text;
+    }
+    const auto digit = [](char letter) { return letter >= '0' && letter <= '9'; };
+    const auto lower = [](char letter) {
+        return static_cast<char>(letter >= 'A' && letter <= 'Z' ? letter + 32 : letter);
+    };
+    const std::size_t length = description.size();
+    for (std::size_t start = 0; start < length; ++start)
+    {
+        if (!digit(description[start]) || (start > 0 && (digit(description[start - 1]) ||
+                                                         description[start - 1] == '.')))
+            continue;
+        std::size_t end = start;
+        while (end < length && (digit(description[end]) || description[end] == '.'))
+            ++end;
+        std::size_t unit = end;
+        while (unit < length && description[unit] == ' ')
+            ++unit;
+        if (unit + 1 >= length)
+            break;
+        const char scale = lower(description[unit]);
+        std::size_t after = unit + 1;
+        if (after < length && lower(description[after]) == 'i')
+            ++after;
+        if ((scale != 'g' && scale != 'm' && scale != 't') || after >= length ||
+            lower(description[after]) != 'b')
+            continue;
+        ++after;
+        if (after < length && std::isalpha(static_cast<unsigned char>(description[after])))
+            continue;
+        return description.substr(start, end - start) + ' ' +
+               static_cast<char>(scale - 32) + 'B';
+    }
+    return {};
+}
+
 std::string season_name(int season)
 {
     return season == 0 ? "Specials" : "Season " + std::to_string(season);
@@ -155,6 +206,7 @@ void DetailsScreen::describe_streams()
         std::replace(text.description.begin(), text.description.end(), '\n', ' ');
         if (stream.url.empty())
             text.reason = "Cannot be played here: " + stream.unsupported;
+        text.size = size_text(stream.size, text.description);
         stream_text_.push_back(std::move(text));
     }
 }
@@ -709,7 +761,27 @@ void DetailsScreen::draw_stream(const Stream &stream, const StreamText &text, fl
 
     // Right: what it is.
     const float text_x = x + kRowPadding + name_width + units(1.0f);
-    const float text_width = x + width - kRowPadding - text_x;
+    float text_width = x + width - kRowPadding - text_x;
+    if (!text.size.empty())
+    {
+        // The file's size, in a tag at the card's top right corner.
+        nvgFontFace(vg_, "semibold");
+        nvgFontSize(vg_, units(0.85f));
+        const float tag_width =
+            nvgTextBounds(vg_, 0, 0, text.size.c_str(), nullptr, nullptr) + units(1.1f);
+        const float tag_height = units(1.5f);
+        const float tag_x = x + width - kRowPadding - tag_width, tag_y = y + kRowPadding - units(0.1f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, tag_x, tag_y, tag_width, tag_height, units(0.4f));
+        fill(nvgRGBAf(1, 1, 1, 0.12f * dim));
+        nvgFill(vg_);
+        nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+        fill(foreground(0.95f * dim));
+        nvgText(vg_, tag_x + tag_width / 2, tag_y + tag_height / 2, text.size.c_str(), nullptr);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+        nvgFontFace(vg_, "regular");
+        text_width -= tag_width + units(0.9f);
+    }
     nvgFontSize(vg_, units(0.9f));
     fill(foreground(0.8f * dim));
     const float used = wrapped_text(vg_, text_x, y + kRowPadding, text_width, units(0.9f) * 1.4f,

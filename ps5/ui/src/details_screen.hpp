@@ -89,6 +89,7 @@ class DetailsScreen
         std::string under;       // the smaller text under that
         std::string description; // what it is
         std::string reason;      // why it cannot be played, when it cannot
+        std::string size;        // the file's size, when it is known
     };
     void describe_streams();
     // `fade_from` and `fade_to` are the heights between which the card fades to nothing

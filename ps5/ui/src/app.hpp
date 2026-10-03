@@ -12,6 +12,7 @@
 #include "account_data.hpp"
 #include "board_data.hpp"
 #include "details_data.hpp"
+#include "player_screen.hpp"
 
 struct NVGcontext;
 
@@ -19,6 +20,7 @@ namespace ui
 {
 class Images;
 class DetailsScreen;
+class PlayerScreen;
 
 enum class Button
 {
@@ -81,6 +83,15 @@ class App
     }
     void set_intent_handler(std::function<void(Intent)> handler);
     void set_sound_handler(std::function<void(Sound)> handler);
+    // The video player. It opens when a stream is chosen (TitleHandler::play starts the
+    // host's player); while it is open the host draws the picture and the app draws only
+    // the controls over it, from what the host reports with set_playback.
+    void set_player_handler(PlayerHandler handler);
+    void set_playback(const Playback &playback);
+    bool player_open() const
+    {
+        return player_open_;
+    }
     // The catalog (by its position among all of the board's catalogs) of the row the
     // focus is on, so the host can load rows ahead of it.
     std::size_t focused_catalog() const
@@ -114,6 +125,7 @@ class App
     void follow_focus();
     void enter_tab();
     void apply(Button button);
+    void close_player();
     // A number that changes whenever a press moves the focus or changes the screen.
     std::size_t focus_mark() const;
     void draw_settings();
@@ -126,6 +138,9 @@ class App
     TitleHandler title_handler_;
     std::unique_ptr<DetailsScreen> details_;
     bool title_open_ = false;
+    std::unique_ptr<PlayerScreen> player_;
+    PlayerHandler player_handler_;
+    bool player_open_ = false;
     // Going between the board and a title's page fades through black, so that the two
     // are never both on screen: 0 is the board, 1 is black.
     float veil_ = 0;

@@ -8,6 +8,7 @@
 #include "icons.hpp"
 #include "images.hpp"
 #include "nanovg.h"
+#include "player_screen.hpp"
 #include "theme.hpp"
 
 namespace ui
@@ -41,6 +42,7 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
     font("semibold", "PlusJakartaSans-SemiBold.ttf");
     font("bold", "PlusJakartaSans-Bold.ttf");
 
+    player_ = std::make_unique<PlayerScreen>(vg_);
     details_ = std::make_unique<DetailsScreen>(vg_, *images_);
     details_->set_callbacks({
         [this](const std::string &video) {
@@ -48,6 +50,8 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
                 title_handler_.select_video(title_type_, title_id_, video);
         },
         [this](const Stream &stream, const std::string &title) {
+            player_open_ = true;
+            player_->open(title);
             if (title_handler_.play)
                 title_handler_.play(stream, title);
         },
@@ -185,6 +189,29 @@ void App::follow_focus()
         target = left + width - visible;
 }
 
+void App::set_player_handler(PlayerHandler handler)
+{
+    player_handler_ = handler;
+    player_->set_handler(std::move(handler));
+}
+
+void App::set_playback(const Playback &playback)
+{
+    if (!player_open_)
+        return;
+    player_->set_playback(playback);
+    // A video that has run to its end goes back to the page it was started from.
+    if (playback.state == Playback::State::Ended)
+        close_player();
+}
+
+void App::close_player()
+{
+    player_open_ = false;
+    if (player_handler_.close)
+        player_handler_.close();
+}
+
 void App::set_sound_handler(std::function<void(Sound)> handler)
 {
     sound_ = std::move(handler);
@@ -206,6 +233,13 @@ std::size_t App::focus_mark() const
 
 void App::press(Button button)
 {
+    if (player_open_)
+    {
+        // No sound effects over a video.
+        if (!player_->press(button))
+            close_player();
+        return;
+    }
     const std::size_t before = focus_mark();
     apply(button);
     if (!sound_)
@@ -332,6 +366,8 @@ void App::apply(Button button)
 
 void App::update(float seconds)
 {
+    if (player_open_)
+        player_->update(seconds);
     if (title_open_)
         details_->update(seconds);
     constexpr float kVeilTime = 0.12f;
@@ -855,6 +891,13 @@ void App::draw(int width, int height)
     images_->begin_frame();
     nvgBeginFrame(vg_, kScreenWidth, kScreenHeight, static_cast<float>(width) / kScreenWidth);
     (void)height;
+    if (player_open_)
+    {
+        // The host has drawn the picture; only the controls go over it.
+        player_->draw();
+        nvgEndFrame(vg_);
+        return;
+    }
 
     nvgBeginPath(vg_);
     nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
