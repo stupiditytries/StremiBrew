@@ -30,6 +30,8 @@ enum class Button
     Right,
     Accept,
     Back,
+    SkipBack,    // L1: in the player, back 15 seconds
+    SkipForward, // R1: forward 15 seconds
 };
 
 // Sound effects the host plays as the user gets about.
@@ -57,8 +59,12 @@ struct TitleHandler
     std::function<void(const std::string &type, const std::string &id, const std::string &video)>
         select_video;
     std::function<void()> close;
-    // Play a stream of the open title; `title` is what the player shows.
-    std::function<void(const Stream &stream, const std::string &title)> play;
+    // Play a stream of the open title; `title` is what the player shows. `type` and `id`
+    // are the title's, and `video` is what is being played: an episode's id, or the
+    // film's own.
+    std::function<void(const Stream &stream, const std::string &title, const std::string &type,
+                       const std::string &id, const std::string &video)>
+        play;
 };
 
 class App
@@ -74,6 +80,10 @@ class App
         std::function<void(const std::string &address, const std::string &file)> fetch,
         std::function<bool(const std::string &address)> failed);
     void set_account(Account account);
+    const Account &account() const
+    {
+        return account_;
+    }
     void set_title_handler(TitleHandler handler);
     // The open title's details, as they arrive and change.
     void set_details(Details details);
@@ -88,6 +98,11 @@ class App
     // the controls over it, from what the host reports with set_playback.
     void set_player_handler(PlayerHandler handler);
     void set_playback(const Playback &playback);
+    void set_player_tracks(PlayerTracks tracks);
+    // Called when the preferred audio or subtitle language is changed in Settings
+    // (three-letter codes; an empty subtitle language is "off").
+    void set_languages_handler(
+        std::function<void(const std::string &audio, const std::string &subtitles)> handler);
     bool player_open() const
     {
         return player_open_;
@@ -126,6 +141,7 @@ class App
     void enter_tab();
     void apply(Button button);
     void close_player();
+    void change_language(bool subtitles, int step);
     // A number that changes whenever a press moves the focus or changes the screen.
     std::size_t focus_mark() const;
     void draw_settings();
@@ -145,11 +161,13 @@ class App
     // are never both on screen: 0 is the board, 1 is black.
     float veil_ = 0;
     bool veil_rising_ = false; // heading for a title's page
-    std::string pending_type_, pending_id_, pending_name_;
+    std::string pending_type_, pending_id_, pending_name_, pending_video_;
     Details pending_known_;
     std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
+    std::function<void(const std::string &, const std::string &)> languages_;
+    int content_focus_ = 0; // Settings: the account button, the audio row, the subtitles row
 
     Zone zone_ = Zone::Rows;
     int navigation_focus_ = 0; // which navigation button the focus is on

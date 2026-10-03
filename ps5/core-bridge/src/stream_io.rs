@@ -1,9 +1,17 @@
 //! A file-like reader over a web address, for the video player: it reads forward through
 //! one connection and, when asked for another part of the file, opens a new connection
 //! that starts there (an HTTP range request).
+//!
+//! What has been read is also kept in a file on the console's disk (the newest couple of
+//! gigabytes of it), and a read that falls inside it is served from there with no request
+//! at all. That is what makes stepping back in a video, or forward into what has already
+//! been read ahead, immediate.
 
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, CStr};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
@@ -25,6 +33,112 @@ const SKIP_LIMIT: u64 = 1 << 20;
 /// How many times in a row a failed read is retried on a new connection.
 const RETRIES: u32 = 3;
 
+/// The cache keeps the file in blocks of this size.
+const BLOCK: u64 = 1 << 20;
+
+/// What has been read of one address, in a file used as a ring of blocks.
+struct Cache {
+    file: File,
+    slots: usize,
+    /// The address the blocks belong to; another address starts the cache afresh.
+    url: String,
+    /// For each block of the video that is held: its slot in the file, and how much of it
+    /// (from its start) has been filled in.
+    blocks: HashMap<u64, (usize, u64)>,
+    /// The held blocks, oldest first.
+    order: VecDeque<u64>,
+}
+
+static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+
+impl Cache {
+    fn claim(&mut self, url: &str) {
+        if self.url != url {
+            self.url = url.to_owned();
+            self.blocks.clear();
+            self.order.clear();
+        }
+    }
+
+    fn read(&mut self, position: u64, buffer: &mut [u8]) -> Option<usize> {
+        let (slot, filled) = *self.blocks.get(&(position / BLOCK))?;
+        let offset = position % BLOCK;
+        if offset >= filled {
+            return None;
+        }
+        let count = buffer.len().min((filled - offset) as usize);
+        self.file.seek(SeekFrom::Start(slot as u64 * BLOCK + offset)).ok()?;
+        self.file.read_exact(&mut buffer[..count]).ok()?;
+        Some(count)
+    }
+
+    fn write(&mut self, mut position: u64, mut data: &[u8]) {
+        while !data.is_empty() {
+            let block = position / BLOCK;
+            let offset = position % BLOCK;
+            let count = data.len().min((BLOCK - offset) as usize);
+            let held = self.blocks.get(&block).copied();
+            let slot = match held {
+                Some((slot, filled)) if filled == offset => Some(slot),
+                Some(_) => None, // already held, or not the next part of it
+                None if offset == 0 => {
+                    // A new block takes a free slot, or the oldest block's.
+                    let slot = if self.order.len() < self.slots {
+                        self.order.len()
+                    } else {
+                        let oldest = self.order.pop_front().unwrap_or(block);
+                        self.blocks.remove(&oldest).map_or(0, |(slot, _)| slot)
+                    };
+                    self.order.push_back(block);
+                    self.blocks.insert(block, (slot, 0));
+                    Some(slot)
+                }
+                None => None, // reading began part-way through this block
+            };
+            if let Some(slot) = slot {
+                let written = self
+                    .file
+                    .seek(SeekFrom::Start(slot as u64 * BLOCK + offset))
+                    .and_then(|_| self.file.write_all(&data[..count]));
+                if written.is_ok() {
+                    self.blocks.insert(block, (slot, offset + count as u64));
+                }
+            }
+            position += count as u64;
+            data = &data[count..];
+        }
+    }
+}
+
+/// Names the file the cache uses and its size. Call once, before any stream is opened.
+#[no_mangle]
+pub extern "C" fn stremio_http_set_cache(path: *const c_char, megabytes: u32) {
+    if path.is_null() {
+        return;
+    }
+    let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path);
+    match file {
+        Ok(file) => {
+            *CACHE.lock().unwrap() = Some(Cache {
+                file,
+                slots: megabytes.max(16) as usize,
+                url: String::new(),
+                blocks: HashMap::new(),
+                order: VecDeque::new(),
+            });
+        }
+        Err(error) => crate::kernel_log(&format!("stream cache not available: {error}")),
+    }
+}
+
 pub struct HttpStream {
     url: String,
     /// Where the next read is wanted.
@@ -45,6 +159,9 @@ impl HttpStream {
             body_position: 0,
         };
         stream.connect().ok()?;
+        if let Some(cache) = CACHE.lock().unwrap().as_mut() {
+            cache.claim(url);
+        }
         Some(stream)
     }
 
@@ -103,6 +220,14 @@ impl HttpStream {
         if self.size.is_some_and(|size| self.position >= size) {
             return Ok(0);
         }
+        if let Some(cache) = CACHE.lock().unwrap().as_mut() {
+            if cache.url == self.url {
+                if let Some(count) = cache.read(self.position, buffer) {
+                    self.position += count as u64;
+                    return Ok(count);
+                }
+            }
+        }
         let mut failures = 0;
         loop {
             let near = self.body.is_some()
@@ -132,6 +257,11 @@ impl HttpStream {
             }
             match self.body.as_mut().map(|body| body.read(buffer)) {
                 Some(Ok(count)) if count > 0 => {
+                    if let Some(cache) = CACHE.lock().unwrap().as_mut() {
+                        if cache.url == self.url {
+                            cache.write(self.position, &buffer[..count]);
+                        }
+                    }
                     self.position += count as u64;
                     self.body_position = self.position;
                     return Ok(count);
@@ -208,4 +338,31 @@ pub extern "C" fn stremio_http_close(stream: *mut HttpStream) {
     if !stream.is_null() {
         drop(unsafe { Box::from_raw(stream) });
     }
+}
+
+/// Fetches a small file (a subtitle) into `out`. Returns its length, or -1 when it could
+/// not be fetched or does not fit.
+#[no_mangle]
+pub extern "C" fn stremio_http_get(url: *const c_char, out: *mut u8, capacity: usize) -> i64 {
+    if url.is_null() || out.is_null() {
+        return -1;
+    }
+    let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() else {
+        return -1;
+    };
+    let Ok(response) = HTTP.get(url).timeout(Duration::from_secs(30)).call() else {
+        return -1;
+    };
+    let mut bytes = Vec::new();
+    if response
+        .into_reader()
+        .take(capacity as u64 + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() > capacity
+    {
+        return -1;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+    bytes.len() as i64
 }

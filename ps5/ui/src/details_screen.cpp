@@ -163,8 +163,10 @@ void DetailsScreen::leave()
     closing_ = true;
 }
 
-void DetailsScreen::open(const std::string &type, const std::string &id, const std::string &name)
+void DetailsScreen::open(const std::string &type, const std::string &id, const std::string &name,
+                         const std::string &video)
 {
+    wanted_video_ = video;
     details_ = Details{};
     details_.type = type;
     details_.id = id;
@@ -224,6 +226,20 @@ void DetailsScreen::set_details(Details details)
         const std::vector<int> all = seasons();
         if (!all.empty())
             season_ = all.front();
+    }
+    if (!wanted_video_.empty() && !details_.episodes.empty())
+    {
+        // Opened from "Continue watching": start on the episode it was left in.
+        if (const Episode *wanted = episode_by_id(wanted_video_))
+        {
+            season_ = wanted->season;
+            const std::vector<const Episode *> listed = season_episodes();
+            const auto place = std::find(listed.begin(), listed.end(), wanted);
+            episode_focus_ = static_cast<std::size_t>(place - listed.begin());
+            follow_focus();
+            episodes_scroll_ = episodes_scroll_target_;
+        }
+        wanted_video_.clear();
     }
     const std::size_t episodes = season_episodes().size();
     episode_focus_ = std::min(episode_focus_, episodes == 0 ? 0 : episodes - 1);
@@ -386,7 +402,8 @@ void DetailsScreen::press(Button button)
             ++stream_focus_;
         else if (button == Button::Accept && stream_focus_ < details_.streams.size() &&
                  !details_.streams[stream_focus_].url.empty() && callbacks_.play)
-            callbacks_.play(details_.streams[stream_focus_], playing_title(episode_by_id(chosen_id_)));
+            callbacks_.play(details_.streams[stream_focus_],
+                            playing_title(episode_by_id(chosen_id_)), chosen_id_);
         else if (button == Button::Back)
         {
             if (is_series())
@@ -690,6 +707,41 @@ void DetailsScreen::draw_episodes()
         nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
         nvgFillColor(vg_, foreground(alpha));
         nvgText(vg_, x + units(0.5f) + badge / 2, y + h - units(1.3f), number.c_str(), nullptr);
+        if (episode.watched)
+        {
+            // A tick in the still's top right corner.
+            const float cx = x + w - units(1.5f), cy = y + units(1.5f), radius = units(0.85f);
+            nvgBeginPath(vg_);
+            nvgCircle(vg_, cx, cy, radius);
+            nvgFillColor(vg_, accent(alpha));
+            nvgFill(vg_);
+            nvgBeginPath(vg_);
+            nvgMoveTo(vg_, cx - radius * 0.42f, cy + radius * 0.02f);
+            nvgLineTo(vg_, cx - radius * 0.1f, cy + radius * 0.34f);
+            nvgLineTo(vg_, cx + radius * 0.45f, cy - radius * 0.3f);
+            nvgStrokeColor(vg_, foreground_solid(alpha));
+            nvgStrokeWidth(vg_, units(0.2f));
+            nvgLineCap(vg_, NVG_ROUND);
+            nvgLineJoin(vg_, NVG_ROUND);
+            nvgStroke(vg_);
+            nvgLineCap(vg_, NVG_BUTT);
+            nvgLineJoin(vg_, NVG_MITER);
+        }
+        if (episode.progress >= 0 && !episode.watched)
+        {
+            // How far through it was left, along the still's foot.
+            const float inset = units(0.5f), bar = units(0.3f);
+            const float track = w - 2 * inset - units(3.0f), left = x + inset + units(3.0f);
+            const float bar_top = y + h - units(1.45f);
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, left, bar_top, track, bar, bar / 2);
+            nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 0.65f * alpha));
+            nvgFill(vg_);
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, left, bar_top, std::max(bar, track * episode.progress), bar, bar / 2);
+            nvgFillColor(vg_, accent(alpha));
+            nvgFill(vg_);
+        }
         if (is_focused || is_chosen)
             focus_ring(vg_, x, y, w, h, kRadius);
 

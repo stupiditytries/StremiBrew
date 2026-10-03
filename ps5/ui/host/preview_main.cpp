@@ -55,6 +55,8 @@ void on_intent(ui::Intent intent)
     case ui::Intent::SignOut:
         account = ui::Account{};
         account.addons = 6;
+        account.audio_language = "eng";
+        account.subtitles_language = "eng";
         break;
     }
     app->set_account(account);
@@ -234,6 +236,8 @@ int main(int argc, char **argv)
         app = &instance;
         instance.set_board(std::move(rows));
         account.addons = 6;
+        account.audio_language = "eng";
+        account.subtitles_language = "eng";
         instance.set_account(account);
         instance.set_intent_handler(on_intent);
         data_folder = std::string{argv[1]};
@@ -246,19 +250,40 @@ int main(int argc, char **argv)
                 show_sample_details(type, id);
             },
             [] {},
-            [](const ui::Stream &stream, const std::string &title) {
-                std::printf("play \"%s\": %s\n", title.c_str(), stream.url.c_str());
+            [](const ui::Stream &stream, const std::string &title, const std::string &,
+               const std::string &, const std::string &video) {
+                std::printf("play \"%s\" (%s): %s\n", title.c_str(), video.c_str(), stream.url.c_str());
             },
         });
         // A stand-in player: no picture, but the controls behave.
         static ui::Playback playback;
-        playback = ui::Playback{ui::Playback::State::Playing, 754.0, 2940.0, false, {}};
+        playback = ui::Playback{};
+        playback.state = ui::Playback::State::Playing;
+        playback.position = 754.0;
+        playback.duration = 2940.0;
+        playback.subtitle = "You see, technically, chemistry\nis the study of matter.";
+        static ui::PlayerTracks tracks;
+        tracks.audio = {{"English", "E-AC-3 5.1"}, {"Spanish", "AAC stereo"}, {"French", "AC-3 5.1"}};
+        tracks.audio_selected = 0;
+        tracks.subtitles = {{"Off", ""},
+                            {"English", "In the video"},
+                            {"English", "OpenSubtitles 1"},
+                            {"English", "OpenSubtitles 2"},
+                            {"Spanish", "OpenSubtitles 1"},
+                            {"French", "OpenSubtitles 1"}};
+        tracks.subtitle_selected = 1;
         instance.set_player_handler({
             [](bool paused) {
                 playback.state = paused ? ui::Playback::State::Paused : ui::Playback::State::Playing;
             },
             [](double seconds) { playback.position = seconds; },
             [] {},
+            [](int index) { tracks.audio_selected = index; },
+            [](int index) { tracks.subtitle_selected = index; },
+            [](double) {},
+        });
+        instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {
+            std::printf("languages: %s / %s\n", audio.c_str(), subtitles.c_str());
         });
         glfwSetKeyCallback(window, on_key);
 
@@ -271,6 +296,7 @@ int main(int argc, char **argv)
             if (playback.state == ui::Playback::State::Playing)
                 playback.position += seconds;
             instance.set_playback(playback);
+            instance.set_player_tracks(tracks);
             instance.update(seconds);
             instance.draw(framebuffer_width, framebuffer_height);
         };

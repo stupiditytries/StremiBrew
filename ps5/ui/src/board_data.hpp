@@ -30,6 +30,10 @@ struct BoardItem
     std::string runtime;
     std::string imdb_rating;
     std::vector<std::string> genres;
+    // For a title part-way through (the "Continue watching" row): how far, 0 to 1, or
+    // less than 0 when it is not; and the video it was left in.
+    float progress = -1;
+    std::string video;
 };
 
 struct BoardRow

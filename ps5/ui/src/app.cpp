@@ -7,6 +7,7 @@
 #include "draw_util.hpp"
 #include "icons.hpp"
 #include "images.hpp"
+#include "languages.hpp"
 #include "nanovg.h"
 #include "player_screen.hpp"
 #include "theme.hpp"
@@ -49,11 +50,12 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
             if (title_handler_.select_video)
                 title_handler_.select_video(title_type_, title_id_, video);
         },
-        [this](const Stream &stream, const std::string &title) {
+        [this](const Stream &stream, const std::string &title, const std::string &video) {
             player_open_ = true;
             player_->open(title);
             if (title_handler_.play)
-                title_handler_.play(stream, title);
+                title_handler_.play(stream, title, title_type_, title_id_,
+                                    video.empty() ? title_id_ : video);
         },
         [this] {
             title_open_ = false;
@@ -205,6 +207,37 @@ void App::set_playback(const Playback &playback)
         close_player();
 }
 
+void App::set_player_tracks(PlayerTracks tracks)
+{
+    if (player_open_)
+        player_->set_tracks(std::move(tracks));
+}
+
+void App::set_languages_handler(
+    std::function<void(const std::string &audio, const std::string &subtitles)> handler)
+{
+    languages_ = std::move(handler);
+}
+
+// Settings: moves a language preference to the next or the previous choice. Subtitles
+// have "off" as their first choice.
+void App::change_language(bool subtitles, int step)
+{
+    constexpr int kCount = static_cast<int>(std::size(kLanguages));
+    std::string &code = subtitles ? account_.subtitles_language : account_.audio_language;
+    const Language *current = find_language(code);
+    // Positions: for subtitles 0 is off and the languages follow.
+    const int choices = kCount + (subtitles ? 1 : 0);
+    int position = current != nullptr ? static_cast<int>(current - kLanguages) + (subtitles ? 1 : 0) : 0;
+    position = ((position + step) % choices + choices) % choices;
+    if (subtitles)
+        code = position == 0 ? "" : kLanguages[position - 1].code;
+    else
+        code = kLanguages[position].code;
+    if (languages_)
+        languages_(account_.audio_language, account_.subtitles_language);
+}
+
 void App::close_player()
 {
     player_open_ = false;
@@ -228,6 +261,8 @@ std::size_t App::focus_mark() const
     add(title_open_);
     add(veil_rising_);
     add(title_open_ ? details_->focus_mark() : 0);
+    add(static_cast<std::size_t>(content_focus_));
+    add(std::hash<std::string>{}(account_.audio_language + '/' + account_.subtitles_language));
     return mark;
 }
 
@@ -272,7 +307,14 @@ void App::apply(Button button)
             enter_tab();
         break;
     case Zone::Content:
-        if (button == Button::Left || button == Button::Back)
+        if (button == Button::Up && content_focus_ > 0)
+            --content_focus_;
+        else if (button == Button::Down && content_focus_ < 2)
+            ++content_focus_;
+        else if (content_focus_ > 0 && (button == Button::Left || button == Button::Right ||
+                                        button == Button::Accept))
+            change_language(content_focus_ == 2, button == Button::Left ? -1 : 1);
+        else if (button == Button::Left || button == Button::Back)
         {
             zone_ = Zone::Navigation;
             navigation_focus_ = selected_tab_;
@@ -335,6 +377,7 @@ void App::apply(Button button)
                 pending_type_ = item->type;
                 pending_id_ = item->id;
                 pending_name_ = item->name;
+                pending_video_ = item->video;
                 // What the board already knows shows at once; the rest follows.
                 Details known;
                 known.type = item->type;
@@ -378,7 +421,7 @@ void App::update(float seconds)
         {
             veil_rising_ = false;
             title_open_ = true;
-            details_->open(pending_type_, pending_id_, pending_name_);
+            details_->open(pending_type_, pending_id_, pending_name_, pending_video_);
             details_->set_details(std::move(pending_known_));
         }
     }
@@ -586,6 +629,20 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
             nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
             nvgFillColor(vg_, foreground(0.5f));
             nvgTextBox(vg_, x + units(0.5f), y + h / 2, w - units(1.0f), item.name.c_str(), nullptr);
+        }
+        if (item.progress >= 0)
+        {
+            // How far through it was left, along the poster's foot.
+            const float inset = units(0.5f), bar = units(0.32f);
+            const float track = w - 2 * inset, bar_top = y + h - inset - bar;
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, x + inset, bar_top, track, bar, bar / 2);
+            nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 0.65f));
+            nvgFill(vg_);
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, x + inset, bar_top, std::max(bar, track * item.progress), bar, bar / 2);
+            nvgFillColor(vg_, accent());
+            nvgFill(vg_);
         }
         if (is_focused)
             focus_ring(vg_, x, y, w, h, kRadius);
@@ -861,7 +918,7 @@ void App::draw_settings()
 
     top += units(1.0f);
     const float width = units(11.0f), height = units(3.25f);
-    const bool focused = zone_ == Zone::Content;
+    const bool focused = zone_ == Zone::Content && content_focus_ == 0;
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, left, top, width, height, height / 2);
     nvgFillColor(vg_, focused ? accent() : overlay(2.0f));
@@ -873,6 +930,42 @@ void App::draw_settings()
     nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
     nvgFillColor(vg_, foreground(1.0f));
     nvgText(vg_, left + width / 2, top + height / 2, button, nullptr);
+    top += height + units(2.6f);
+
+    // Playback: the languages picked first for a video's sound and subtitles.
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, kRowTitleSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground());
+    nvgText(vg_, left, top, "Playback", nullptr);
+    top += kRowTitleSize * 1.2f + units(1.0f);
+    const auto choice = [&](int index, const char *label, const std::string &value) {
+        const bool chosen = zone_ == Zone::Content && content_focus_ == index;
+        const float row_width = units(30.0f), row_height = units(3.25f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, left, top, row_width, row_height, kRadius);
+        nvgFillColor(vg_, overlay(chosen ? 3.0f : 1.6f));
+        nvgFill(vg_);
+        if (chosen)
+            focus_ring(vg_, left, top, row_width, row_height, kRadius);
+        const float middle = top + row_height / 2;
+        nvgFontFace(vg_, "regular");
+        nvgFontSize(vg_, units(1.15f));
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg_, foreground(0.75f));
+        nvgText(vg_, left + units(1.2f), middle, label, nullptr);
+        nvgFontFace(vg_, "semibold");
+        nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg_, foreground(1.0f));
+        // Arrows either side of the value show that left and right change it.
+        const std::string shown = chosen ? "\xE2\x80\xB9   " + value + "   \xE2\x80\xBA" : value;
+        nvgText(vg_, left + row_width - units(1.2f), middle, shown.c_str(), nullptr);
+        top += row_height + units(0.6f);
+    };
+    choice(1, "Audio language", language_name(account_.audio_language));
+    choice(2, "Subtitles",
+           account_.subtitles_language.empty() ? std::string{"Off"}
+                                               : language_name(account_.subtitles_language));
 }
 
 void App::draw_unbuilt_tab()

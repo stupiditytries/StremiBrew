@@ -18,6 +18,8 @@ struct Episode
     std::string released; // YYYY-MM-DD, or empty
     std::string thumbnail;
     std::string overview;
+    bool watched = false;
+    float progress = -1; // 0 to 1 for the episode left part-way; less than 0 otherwise
 };
 
 struct Stream
@@ -28,6 +30,7 @@ struct Stream
     std::string url;         // empty when this app cannot play the stream
     std::string unsupported; // why not, when `url` is empty
     std::uint64_t size = 0;  // the file's size in bytes, when the add-on says
+    int index = 0;           // its place in the title's list of streams, for the core
 };
 
 struct Details

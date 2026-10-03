@@ -40,8 +40,10 @@ class DetailsScreen
     {
         // Load the streams for one of the title's videos (an episode).
         std::function<void(const std::string &video)> select_video;
-        // Play a stream; `title` is what the player shows.
-        std::function<void(const Stream &stream, const std::string &title)> play;
+        // Play a stream; `title` is what the player shows, `video` the episode's id
+        // (empty for a film).
+        std::function<void(const Stream &stream, const std::string &title, const std::string &video)>
+            play;
         std::function<void()> close;
     };
 
@@ -51,7 +53,9 @@ class DetailsScreen
     // Starts the page's closing animation; `Callbacks::close` is called when it is done.
     void leave();
     // Starts showing a title, known so far only by what the board had about it.
-    void open(const std::string &type, const std::string &id, const std::string &name);
+    // `video`, when given, is the episode to start on (the one it was left in).
+    void open(const std::string &type, const std::string &id, const std::string &name,
+              const std::string &video = {});
     void set_details(Details details);
     void press(Button button);
     // A number that changes whenever a press moves the focus or leaves the page.
@@ -103,6 +107,7 @@ class DetailsScreen
     Callbacks callbacks_;
     Details details_;
     std::string opened_name_;
+    std::string wanted_video_; // the episode to put the focus on once the episodes arrive
 
     Zone zone_ = Zone::Streams;
     int season_ = 1;

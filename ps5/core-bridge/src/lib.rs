@@ -7,7 +7,9 @@ mod account;
 mod details;
 mod env;
 mod model;
+mod playback;
 mod stream_io;
+mod subtitles;
 
 use std::collections::VecDeque;
 use std::ffi::{c_char, CStr};
@@ -351,12 +353,15 @@ struct BoardItem<'a> {
     poster_shape: &'a stremio_core::types::resource::PosterShape,
     release_info: Option<&'a str>,
     // What the featured area at the top of the board shows about the focused item.
-    background: Option<&'a str>,
-    logo: Option<&'a str>,
+    background: Option<std::borrow::Cow<'a, str>>,
+    logo: Option<std::borrow::Cow<'a, str>>,
     description: Option<&'a str>,
     runtime: Option<&'a str>,
     imdb_rating: Option<&'a str>,
     genres: Vec<&'a str>,
+    /// For a title part-way through: how far (0 to 1), and the video it was left in.
+    progress: Option<f64>,
+    video: Option<&'a str>,
 }
 
 /// Stremio's poster service offers each poster in three sizes and catalogs link the
@@ -386,7 +391,55 @@ pub extern "C" fn stremio_core_board_rows(
         set_error("model read failed");
         return 0;
     };
-    let rows: Vec<BoardRow> = model
+    // The first row is the titles part-way through, when there are any.
+    let resume: Vec<BoardItem> = model
+        .continue_watching
+        .items
+        .iter()
+        .take(items_per_row as usize)
+        .map(|item| {
+            let item = &item.library_item;
+            // The library keeps little about a title; Stremio's artwork service has the
+            // rest for the ones it knows (IMDb ids).
+            let art = |kind: &str| {
+                item.id.starts_with("tt").then(|| {
+                    format!("https://images.metahub.space/{kind}/medium/{}/img", item.id).into()
+                })
+            };
+            BoardItem {
+                id: &item.id,
+                r#type: &item.r#type,
+                name: &item.name,
+                poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
+                poster_shape: &item.poster_shape,
+                release_info: None,
+                background: art("background"),
+                logo: art("logo"),
+                description: None,
+                runtime: None,
+                imdb_rating: None,
+                genres: vec![],
+                progress: Some((item.progress() / 100.0).clamp(0.0, 1.0)),
+                video: item.state.video_id.as_deref(),
+            }
+        })
+        .collect();
+    let first_shape = stremio_core::types::resource::PosterShape::default();
+    let mut rows: Vec<BoardRow> = Vec::new();
+    if !resume.is_empty() {
+        let _ = &first_shape;
+        rows.push(BoardRow {
+            index: 0,
+            id: "continue_watching",
+            name: "Continue watching",
+            r#type: "",
+            addon: "",
+            state: "ready",
+            error: None,
+            items: resume,
+        });
+    }
+    rows.extend(model
         .board
         .catalogs
         .iter()
@@ -425,8 +478,8 @@ pub extern "C" fn stremio_core_board_rows(
                             poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
                             poster_shape: shape.unwrap_or(&item.poster_shape),
                             release_info: item.release_info.as_deref(),
-                            background: item.background.as_ref().map(|url| url.as_str()),
-                            logo: item.logo.as_ref().map(|url| url.as_str()),
+                            background: item.background.as_ref().map(|url| url.as_str().into()),
+                            logo: item.logo.as_ref().map(|url| url.as_str().into()),
                             description: item.description.as_deref(),
                             runtime: item.runtime.as_deref(),
                             imdb_rating: item
@@ -441,6 +494,8 @@ pub extern "C" fn stremio_core_board_rows(
                                 .map(|link| link.name.as_str())
                                 .take(3)
                                 .collect(),
+                            progress: None,
+                            video: None,
                         })
                         .collect();
                     ("ready", None, items)
@@ -458,8 +513,7 @@ pub extern "C" fn stremio_core_board_rows(
                 error,
                 items,
             })
-        })
-        .collect();
+        }));
     match serde_json::to_string(&rows) {
         Ok(json) => copy_out(&json, out, capacity),
         Err(error) => {
@@ -574,6 +628,93 @@ pub extern "C" fn stremio_core_account(out: *mut c_char, capacity: usize) -> usi
     match serde_json::to_string(&account::account(&model)) {
         Ok(json) => copy_out(&json, out, capacity),
         Err(_) => 0,
+    }
+}
+
+/// Tells the core that one of the open title's streams is being played: the `index`th
+/// in the details' list. Returns 0 when it was started.
+#[no_mangle]
+pub extern "C" fn stremio_core_player_load(index: u32) -> i32 {
+    match RUNTIME.get() {
+        Some(runtime) if playback::load(runtime, index as usize) => 0,
+        _ => -1,
+    }
+}
+
+/// Reports where playback is, in milliseconds; `seek` is true when the user jumped there.
+#[no_mangle]
+pub extern "C" fn stremio_core_player_time(time: u64, duration: u64, seek: bool) {
+    if let Some(runtime) = RUNTIME.get() {
+        playback::time(runtime, time, duration, seek);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn stremio_core_player_paused(paused: bool) {
+    if let Some(runtime) = RUNTIME.get() {
+        playback::paused(runtime, paused);
+    }
+}
+
+/// The video played to its end.
+#[no_mangle]
+pub extern "C" fn stremio_core_player_ended() {
+    if let Some(runtime) = RUNTIME.get() {
+        playback::ended(runtime);
+    }
+}
+
+/// The player was closed. The core saves the progress made.
+#[no_mangle]
+pub extern "C" fn stremio_core_player_unload() {
+    if let Some(runtime) = RUNTIME.get() {
+        playback::unload(runtime);
+    }
+}
+
+/// Where `video` of `title` was left, in milliseconds (0 when it was not started, or the
+/// title was last left in another video).
+#[no_mangle]
+pub extern "C" fn stremio_core_resume_offset(title: *const c_char, video: *const c_char) -> u64 {
+    let (Some(runtime), Some(title), Some(video)) = (RUNTIME.get(), c_str(title), c_str(video))
+    else {
+        return 0;
+    };
+    runtime
+        .model()
+        .map_or(0, |model| playback::resume_offset(&model, title, video))
+}
+
+/// Asks the account's add-ons for a video's subtitles and writes what they offer as a
+/// JSON list (see `subtitles::Subtitle`). This waits for the add-ons, so it is called from
+/// a thread that may wait. Returns the JSON's length, or 0 on failure.
+#[no_mangle]
+pub extern "C" fn stremio_core_subtitles(
+    kind: *const c_char,
+    id: *const c_char,
+    out: *mut c_char,
+    capacity: usize,
+) -> usize {
+    let (Some(runtime), Some(kind), Some(id)) = (RUNTIME.get(), c_str(kind), c_str(id)) else {
+        return 0;
+    };
+    let sources = match runtime.model() {
+        Ok(model) => subtitles::sources(&model, kind, id),
+        Err(_) => return 0,
+    };
+    match serde_json::to_string(&subtitles::fetch(sources)) {
+        Ok(json) => copy_out(&json, out, capacity),
+        Err(_) => 0,
+    }
+}
+
+/// Sets the account's preferred audio and subtitle languages (three-letter codes; null or
+/// empty for none). They are part of the Stremio profile, so they follow the account.
+#[no_mangle]
+pub extern "C" fn stremio_core_set_languages(audio: *const c_char, subtitles: *const c_char) {
+    if let Some(runtime) = RUNTIME.get() {
+        let chosen = |code: *const c_char| c_str(code).filter(|code| !code.is_empty()).map(str::to_owned);
+        account::set_languages(runtime, chosen(audio), chosen(subtitles));
     }
 }
 

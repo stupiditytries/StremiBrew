@@ -28,7 +28,7 @@
 #include "core_link.hpp"
 #include "details_data.hpp"
 #include "pad.hpp"
-#include "player.hpp"
+#include "play_control.hpp"
 #include "sounds.hpp"
 #include "theme.hpp"
 
@@ -51,6 +51,8 @@ extern "C"
     std::size_t stremio_core_account(char *out, std::size_t capacity);
     std::int32_t stremio_core_load_details(const char *type, const char *id, const char *video);
     std::size_t stremio_core_details(char *out, std::size_t capacity);
+    void stremio_core_set_languages(const char *audio, const char *subtitles);
+    void stremio_http_set_cache(const char *path, std::uint32_t megabytes);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
     int sceKernelDebugOutText(int channel, const char *text);
 }
@@ -328,7 +330,7 @@ int main()
             }
         });
     });
-    ps5::Player player;
+    ps5::PlayControl playing{app, core, vg};
     app.set_title_handler({
         [&core](const std::string &type, const std::string &id) {
             core.post([type, id] { stremio_core_load_details(type.c_str(), id.c_str(), nullptr); });
@@ -339,18 +341,14 @@ int main()
             });
         },
         [] {},
-        [&player](const ui::Stream &stream, const std::string &title) {
-            log_line("playing \"%s\" from %s", title.c_str(), stream.addon.c_str());
-            player.open(stream.url);
+        [&playing](const ui::Stream &stream, const std::string &, const std::string &type,
+                   const std::string &id, const std::string &video) {
+            playing.start(stream, type, id, video);
         },
     });
-    app.set_player_handler({
-        [&player](bool paused) { player.set_paused(paused); },
-        [&player](double seconds) { player.seek(seconds); },
-        [&player] {
-            log_line("player closed");
-            player.close();
-        },
+    app.set_player_handler(playing.handler());
+    app.set_languages_handler([&core](const std::string &audio, const std::string &subtitles) {
+        core.post([audio, subtitles] { stremio_core_set_languages(audio.c_str(), subtitles.c_str()); });
     });
 
     if (stremio_core_init(kStorageFolder) != 0)
@@ -362,6 +360,8 @@ int main()
     else
     {
         log_line("core started");
+        // What a video has read is kept on disk, so stepping back needs no new download.
+        stremio_http_set_cache("/download0/stremio/stream-cache.bin", 2048);
         core.start();
         core.post([] {
             // Downloaded artwork is kept between runs up to this size; the oldest goes first.
@@ -399,8 +399,6 @@ int main()
             app.set_account(std::move(account));
         core.set_focused_catalog(app.focused_catalog());
         core.set_title_open(app.title_open());
-        if (app.player_open())
-            app.set_playback(player.status());
 
         const double now = seconds_now();
         const float elapsed = static_cast<float>(now - previous);
@@ -410,8 +408,7 @@ int main()
 
         canvas.begin();
         // A playing video's picture goes under the UI, which then draws only its controls.
-        if (app.player_open())
-            player.draw(width, height);
+        playing.frame(width, height);
         app.update(elapsed);
         app.draw(width, height);
         const double drawn = seconds_now();

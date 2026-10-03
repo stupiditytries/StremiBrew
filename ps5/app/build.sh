@@ -135,10 +135,11 @@ rm -rf "$app"
 mkdir -p "$app/sce_sys" "$app/sce_module" "$app/assets/fonts"
 "$tool" self --sign --in "$out/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F
 cp "$REPO/ps5/app/sce_sys/param.json" "$app/sce_sys/"
-# Placeholder artwork from the template until the app has its own.
-for asset in icon0.png pic0.dds pic1.dds; do
-    cp "$TEMPLATE/sce_sys/$asset" "$app/sce_sys/"
-done
+# The picture behind the app's tile on the console's home screen (the console wants it
+# twice). The icon is still the template's placeholder.
+cp "$TEMPLATE/sce_sys/icon0.png" "$app/sce_sys/"
+cp "$REPO/ps5/app/sce_sys/pic0.dds" "$app/sce_sys/pic0.dds"
+cp "$REPO/ps5/app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds"
 cp "$TEMPLATE/runtime/libc.prx" "$app/sce_module/"
 cp "$ui"/assets/fonts/*.ttf "$ui/assets/fonts/OFL.txt" "$app/assets/fonts/"
 ls -la "$app" "$app/assets/fonts"

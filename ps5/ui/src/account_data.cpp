@@ -31,6 +31,8 @@ bool parse_account(std::string_view json, Account &account)
     parsed.code = text(document, "code");
     parsed.link_page = text(document, "linkPage");
     parsed.error = text(document, "error");
+    parsed.audio_language = text(document, "audioLanguage");
+    parsed.subtitles_language = text(document, "subtitlesLanguage");
     account = std::move(parsed);
     return true;
 }

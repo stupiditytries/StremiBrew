@@ -3,6 +3,8 @@
 //! built.
 
 use stremio_core::models::catalogs_with_extra::CatalogsWithExtra;
+use stremio_core::models::continue_watching_preview::ContinueWatchingPreview;
+use stremio_core::models::player::Player;
 use stremio_core::models::ctx::Ctx;
 use stremio_core::models::link::Link;
 use stremio_core::models::meta_details::MetaDetails;
@@ -27,6 +29,10 @@ pub struct Ps5Model {
     pub auth_link: Link<LinkAuthKey>,
     pub board: CatalogsWithExtra,
     pub meta_details: MetaDetails,
+    /// What is playing: the core keeps the library's watch progress from it.
+    pub player: Player,
+    /// The titles part-way through, for the board's first row.
+    pub continue_watching: ContinueWatchingPreview,
 }
 
 impl Ps5Model {
@@ -39,6 +45,7 @@ impl Ps5Model {
         search_history: SearchHistoryBucket,
         dismissed_events: DismissedEventsBucket,
     ) -> (Ps5Model, Effects) {
+        let (continue_watching, _) = ContinueWatchingPreview::new(&library, &notifications);
         let model = Ps5Model {
             ctx: Ctx::new(
                 profile,
@@ -52,6 +59,8 @@ impl Ps5Model {
             auth_link: Link::default(),
             board: CatalogsWithExtra::default(),
             meta_details: MetaDetails::default(),
+            player: Player::default(),
+            continue_watching,
         };
         (model, Effects::none().unchanged())
     }

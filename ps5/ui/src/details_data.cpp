@@ -63,6 +63,10 @@ bool parse_details(std::string_view json, Details &details)
             episode.released = text(source, "released");
             episode.thumbnail = text(source, "thumbnail");
             episode.overview = text(source, "overview");
+            episode.watched = source.value("watched", false);
+            if (const auto progress = source.find("progress");
+                progress != source.end() && progress->is_number())
+                episode.progress = progress->get<float>();
             parsed.episodes.push_back(std::move(episode));
         }
 
@@ -78,6 +82,7 @@ bool parse_details(std::string_view json, Details &details)
                 for (const auto &source : *streams)
                 {
                     Stream stream;
+                    stream.index = static_cast<int>(parsed.streams.size());
                     stream.addon = addon;
                     stream.name = text(source, "name");
                     stream.description = text(source, "description");

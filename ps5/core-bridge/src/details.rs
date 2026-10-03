@@ -47,6 +47,9 @@ struct Video<'a> {
     released: Option<String>,
     thumbnail: Option<&'a str>,
     overview: Option<&'a str>,
+    /// Whether the account has watched it, and for the one left part-way how far (0 to 1).
+    watched: bool,
+    progress: Option<f64>,
 }
 
 /// One add-on's answer for the selected video.
@@ -193,6 +196,23 @@ pub fn details(model: &Ps5Model) -> Option<Details<'_>> {
                     released: video.released.map(|date| date.format("%Y-%m-%d").to_string()),
                     thumbnail: video.thumbnail.as_deref(),
                     overview: video.overview.as_deref(),
+                    watched: model
+                        .meta_details
+                        .watched
+                        .as_ref()
+                        .is_some_and(|watched| watched.get_video(&video.id)),
+                    progress: model
+                        .meta_details
+                        .library_item
+                        .as_ref()
+                        .filter(|library| {
+                            library.state.video_id.as_deref() == Some(video.id.as_str())
+                                && library.state.duration > 0
+                        })
+                        .map(|library| {
+                            (library.state.time_offset as f64 / library.state.duration as f64)
+                                .clamp(0.0, 1.0)
+                        }),
                 })
                 .collect(),
             stream_video,

@@ -20,6 +20,7 @@ namespace
 constexpr std::size_t kStateSize = 120;
 constexpr std::uint32_t kUp = 0x0010, kRight = 0x0020, kDown = 0x0040, kLeft = 0x0080;
 constexpr std::uint32_t kCircle = 0x2000, kCross = 0x4000;
+constexpr std::uint32_t kL1 = 0x0400, kR1 = 0x0800;
 constexpr std::uint32_t kDirections = kUp | kRight | kDown | kLeft;
 constexpr int kStickThreshold = 70; // how far from centre the stick counts as a direction
 
@@ -49,7 +50,7 @@ void Pad::poll(float seconds, const std::function<void(ui::Button)> &press)
     const int stick_x = static_cast<int>(state[4]) - 128;
     const int stick_y = static_cast<int>(state[5]) - 128;
 
-    std::uint32_t down = buttons & (kDirections | kCross | kCircle);
+    std::uint32_t down = buttons & (kDirections | kCross | kCircle | kL1 | kR1);
     if (stick_x < -kStickThreshold)
         down |= kLeft;
     else if (stick_x > kStickThreshold)
@@ -72,6 +73,10 @@ void Pad::poll(float seconds, const std::function<void(ui::Button)> &press)
             press(ui::Button::Accept);
         if (bits & kCircle)
             press(ui::Button::Back);
+        if (bits & kL1)
+            press(ui::Button::SkipBack);
+        if (bits & kR1)
+            press(ui::Button::SkipForward);
     };
 
     const std::uint32_t pressed = down & ~held_;

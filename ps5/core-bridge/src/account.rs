@@ -32,6 +32,9 @@ pub struct Account {
     /// The page where the code is entered.
     link_page: Option<String>,
     error: Option<String>,
+    /// The preferred languages for sound and subtitles (three-letter codes).
+    audio_language: Option<String>,
+    subtitles_language: Option<String>,
 }
 
 fn dispatch(core: &Core, field: Option<Ps5ModelField>, action: Action) {
@@ -50,6 +53,23 @@ pub fn cancel_link(core: &Core) {
 
 pub fn sign_out(core: &Core) {
     dispatch(core, Some(Ps5ModelField::Ctx), Action::Ctx(ActionCtx::Logout));
+}
+
+pub fn set_languages(core: &Core, audio: Option<String>, subtitles: Option<String>) {
+    let settings = {
+        let Ok(model) = core.model() else {
+            return;
+        };
+        let mut settings = model.ctx.profile.settings.clone();
+        settings.audio_language = audio;
+        settings.subtitles_language = subtitles;
+        settings
+    };
+    dispatch(
+        core,
+        Some(Ps5ModelField::Ctx),
+        Action::Ctx(ActionCtx::UpdateSettings(settings)),
+    );
 }
 
 /// What `advance` should do next, decided while the model is locked and done after it is
@@ -120,6 +140,8 @@ pub fn account(model: &Ps5Model) -> Account {
         signed_in: auth.is_some(),
         email: auth.map(|auth| auth.user.email.clone()),
         addons: model.ctx.profile.addons.len(),
+        audio_language: model.ctx.profile.settings.audio_language.clone(),
+        subtitles_language: model.ctx.profile.settings.subtitles_language.clone(),
         link,
         code,
         link_page,

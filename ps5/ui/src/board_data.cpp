@@ -36,8 +36,9 @@ bool parse_board(std::string_view json, std::vector<BoardRow> &rows)
     {
         BoardRow row;
         row.index = entry.value("index", rows.size());
-        row.title = entry.value("name", std::string{}) + " - " +
-                    capitalised(entry.value("type", std::string{}));
+        // A catalog row is titled with its kind ("Popular - Movie"); others just by name.
+        const std::string kind = entry.value("type", std::string{});
+        row.title = entry.value("name", std::string{}) + (kind.empty() ? "" : " - " + capitalised(kind));
         const std::string state = entry.value("state", std::string{"loading"});
         row.loading = state == "loading";
         if (state == "error")
@@ -63,6 +64,10 @@ bool parse_board(std::string_view json, std::vector<BoardRow> &rows)
                 item.release_info = text("releaseInfo");
                 item.runtime = text("runtime");
                 item.imdb_rating = text("imdbRating");
+                item.video = text("video");
+                if (const auto progress = source.find("progress");
+                    progress != source.end() && progress->is_number())
+                    item.progress = progress->get<float>();
                 if (const auto genres = source.find("genres");
                     genres != source.end() && genres->is_array())
                     for (const auto &genre : *genres)

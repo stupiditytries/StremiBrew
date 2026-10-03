@@ -25,6 +25,9 @@ struct Account
     std::string code;      // the code to enter
     std::string link_page; // the page to enter it on
     std::string error;
+    // The preferred languages (three-letter codes); no subtitle language means off.
+    std::string audio_language;
+    std::string subtitles_language;
 };
 
 // Parses the bridge's JSON. Returns false and leaves `account` untouched when it is not valid.
