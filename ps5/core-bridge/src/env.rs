@@ -59,19 +59,67 @@ pub(crate) fn fetch_to_file(url: String, path: PathBuf) {
     /// Posters are tens of kilobytes; anything far larger is not an image worth keeping.
     const LIMIT: u64 = 16 << 20;
     IO_POOL.spawn_ok(async move {
-        let Ok(response) = HTTP.get(&url).call() else {
-            return;
-        };
-        let mut bytes = Vec::new();
-        let mut limited = std::io::Read::take(response.into_reader(), LIMIT);
-        if std::io::Read::read_to_end(&mut limited, &mut bytes).is_err() || bytes.is_empty() {
-            return;
-        }
-        let temporary = path.with_extension("part");
-        if std::fs::write(&temporary, &bytes).is_ok() {
-            let _ = std::fs::rename(&temporary, &path);
+        let saved = (|| {
+            let response = HTTP.get(&url).call().ok()?;
+            let mut bytes = Vec::new();
+            let mut limited = std::io::Read::take(response.into_reader(), LIMIT);
+            std::io::Read::read_to_end(&mut limited, &mut bytes).ok()?;
+            if bytes.is_empty() {
+                return None;
+            }
+            let temporary = path.with_extension("part");
+            std::fs::write(&temporary, &bytes).ok()?;
+            std::fs::rename(&temporary, &path).ok()
+        })();
+        if saved.is_none() {
+            if let Ok(mut failed) = FAILED_DOWNLOADS.lock() {
+                failed.insert(url);
+            }
         }
     });
+}
+
+/// Addresses whose download failed in this run. Kept in memory only, so a failure caused
+/// by a passing network problem is tried again the next time the app starts.
+static FAILED_DOWNLOADS: Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(Default::default);
+
+pub(crate) fn fetch_failed(url: &str) -> bool {
+    FAILED_DOWNLOADS
+        .lock()
+        .map(|failed| failed.contains(url))
+        .unwrap_or(false)
+}
+
+/// Deletes the files in `folder` that were used longest ago until what is left is no
+/// larger than `limit` bytes. Returns how many files were deleted.
+pub(crate) fn trim_folder(folder: &std::path::Path, limit: u64) -> usize {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return 0;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let status = entry.metadata().ok()?;
+            status
+                .is_file()
+                .then(|| (status.modified().unwrap_or(std::time::UNIX_EPOCH), status.len(), entry.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    // Oldest first.
+    files.sort();
+    let mut deleted = 0;
+    for (_, size, path) in files {
+        if total <= limit {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total -= size;
+            deleted += 1;
+        }
+    }
+    deleted
 }
 
 fn storage_path(key: &str) -> Result<PathBuf, EnvError> {

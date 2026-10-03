@@ -102,9 +102,10 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
 App::~App() = default;
 
 void App::set_image_fetcher(
-    std::function<void(const std::string &address, const std::string &file)> fetcher)
+    std::function<void(const std::string &address, const std::string &file)> fetch,
+    std::function<bool(const std::string &address)> failed)
 {
-    images_->set_fetcher(std::move(fetcher));
+    images_->set_fetcher(std::move(fetch), std::move(failed));
 }
 
 void App::set_account(Account account)
@@ -292,15 +293,61 @@ void App::update(float seconds)
     for (std::size_t row = 0; row < scroll_x_.size(); ++row)
         scroll_x_[row] = eased(scroll_x_[row], scroll_x_target_[row], seconds);
     focus_pulse_ = eased(focus_pulse_, 1.0f, seconds);
+    frame_seconds_ = seconds;
+
+    // The featured area follows the focus at a remove. It keeps showing its item until
+    // the focus has rested on another one for a moment (so moving along a row does not
+    // make it flicker), fades out, switches, and fades the new item in.
     const BoardItem *item = focused_item();
-    const std::string hero = item != nullptr ? item->id : std::string{};
-    if (hero != hero_item_)
+    const std::string target = item != nullptr ? item->id : std::string{};
+    if (target != hero_target_)
     {
-        hero_item_ = hero;
-        hero_fade_ = 0;
+        hero_target_ = target;
+        hero_dwell_ = 0;
     }
-    // Slower than the focus animation, so artwork eases in rather than snapping.
-    hero_fade_ += (1.0f - hero_fade_) * (1.0f - std::exp(-seconds * 6.0f));
+    else
+    {
+        hero_dwell_ += seconds;
+    }
+    const bool stale = hero_valid_ ? hero_.id != hero_target_ : item != nullptr;
+    if (stale && hero_dwell_ >= kHeroDwell)
+    {
+        const float step = seconds / kHeroFadeOut;
+        hero_alpha_ = std::max(0.0f, hero_alpha_ - step);
+        hero_logo_alpha_ = std::max(0.0f, hero_logo_alpha_ - step);
+        hero_art_alpha_ = std::max(0.0f, hero_art_alpha_ - step);
+        if (hero_alpha_ <= 0 && hero_logo_alpha_ <= 0 && hero_art_alpha_ <= 0)
+        {
+            hero_valid_ = item != nullptr;
+            if (item != nullptr)
+                hero_ = *item;
+        }
+    }
+    else if (!stale && hero_valid_)
+    {
+        hero_alpha_ = std::min(1.0f, hero_alpha_ + seconds / kHeroFadeIn);
+    }
+
+    // Artwork the featured area is likely to need next is downloaded ahead of time: the
+    // focused row's neighbouring items, and the items the rows above and below would
+    // land on.
+    if (row_focus_ < rows_.size())
+    {
+        const auto warm = [&](std::size_t row, std::size_t first, std::size_t count) {
+            const auto &items = rows_[row].items;
+            for (std::size_t column = first; column < items.size() && column < first + count; ++column)
+            {
+                images_->prefetch(items[column].logo);
+                images_->prefetch(items[column].background);
+            }
+        };
+        const std::size_t column = column_focus_[row_focus_];
+        warm(row_focus_, column > 2 ? column - 2 : 0, 9);
+        if (row_focus_ > 0)
+            warm(row_focus_ - 1, column_focus_[row_focus_ - 1], 2);
+        if (row_focus_ + 1 < rows_.size())
+            warm(row_focus_ + 1, column_focus_[row_focus_ + 1], 2);
+    }
     for (int index = 0; index < kTabCount; ++index)
     {
         const bool focused = zone_ == Zone::Navigation && index == navigation_focus_;
@@ -423,7 +470,7 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
         }
 
         const Images::Texture texture = images_->get(item.poster);
-        if (texture.handle != 0)
+        if (texture.state == Images::State::Ready)
         {
             cover_image(vg_, x, y, w, h, kRadius, texture);
         }
@@ -473,19 +520,25 @@ const BoardItem *App::focused_item() const
 // black on its left and lower edges, with its title, key facts and description on the left.
 void App::draw_hero()
 {
-    const BoardItem *item = focused_item();
-    if (item == nullptr)
+    if (!hero_valid_)
         return;
-    const float fade = hero_fade_;
+    const BoardItem *item = &hero_;
+    const float fade = hero_alpha_;
+    // Artwork and logo fade in on their own once they have arrived, and only while the
+    // area is showing the item they belong to (not while it is fading out to switch).
+    const bool current = hero_.id == hero_target_;
+    const float rise = frame_seconds_ / kHeroFadeIn;
 
     // Artwork, 16:9 at the area's full height, against the right edge.
     const float image_height = kHeroHeight;
     const float image_width = image_height * 16.0f / 9.0f;
     const float image_left = kScreenWidth - image_width;
     const Images::Texture background = images_->get(item->background);
-    if (background.handle != 0)
+    if (background.state == Images::State::Ready)
     {
-        nvgGlobalAlpha(vg_, fade);
+        if (current)
+            hero_art_alpha_ = std::min(1.0f, hero_art_alpha_ + rise);
+        nvgGlobalAlpha(vg_, hero_art_alpha_);
         cover_image(vg_, image_left, 0, image_width, image_height, 0, background);
         nvgGlobalAlpha(vg_, 1.0f);
         const auto shade = [&](float x0, float y0, float x1, float y1, float from, float to) {
@@ -504,20 +557,25 @@ void App::draw_hero()
     const float left = kNavWidth + kContentInset + kCardPadding;
     float top = kHeroTextTop;
 
-    // The title: the item's logo artwork when it has one, otherwise its name.
+    // The title: the item's logo artwork when it has one. While the logo is on its way
+    // the space stays empty; the name is written out only for an item that has no logo, or
+    // whose logo could not be had.
     const Images::Texture logo = images_->get(item->logo);
-    if (logo.handle != 0 && logo.width > 0 && logo.height > 0)
+    if (logo.state == Images::State::Ready && logo.width > 0 && logo.height > 0)
     {
+        if (current)
+            hero_logo_alpha_ = std::min(1.0f, hero_logo_alpha_ + rise);
         const float scale = std::min(kHeroLogoWidth / static_cast<float>(logo.width),
                                      kHeroLogoHeight / static_cast<float>(logo.height));
         const float width = logo.width * scale, height = logo.height * scale;
         const float y = top + (kHeroLogoHeight - height); // sits on the box's lower edge
         nvgBeginPath(vg_);
         nvgRect(vg_, left, y, width, height);
-        nvgFillPaint(vg_, nvgImagePattern(vg_, left, y, width, height, 0, logo.handle, fade));
+        nvgFillPaint(vg_, nvgImagePattern(vg_, left, y, width, height, 0, logo.handle,
+                                          hero_logo_alpha_));
         nvgFill(vg_);
     }
-    else
+    else if (logo.state == Images::State::Unavailable)
     {
         nvgFontFace(vg_, "bold");
         nvgFontSize(vg_, kHeroTitleSize);

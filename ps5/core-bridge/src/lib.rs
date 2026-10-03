@@ -553,3 +553,16 @@ pub extern "C" fn stremio_core_board_load_range(start: u32, end: u32) {
         });
     }
 }
+
+/// Whether a download started with `stremio_core_fetch_file` for `url` has failed.
+#[no_mangle]
+pub extern "C" fn stremio_core_fetch_failed(url: *const c_char) -> bool {
+    c_str(url).is_some_and(env::fetch_failed)
+}
+
+/// Trims the folder of downloaded images to `limit` bytes, deleting the files that were
+/// written longest ago. Returns how many files were deleted.
+#[no_mangle]
+pub extern "C" fn stremio_core_trim_folder(folder: *const c_char, limit: u64) -> usize {
+    c_str(folder).map_or(0, |folder| env::trim_folder(std::path::Path::new(folder), limit))
+}

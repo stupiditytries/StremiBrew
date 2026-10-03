@@ -44,9 +44,10 @@ class App
     ~App();
 
     void set_board(std::vector<BoardRow> rows);
-    // Where images that are not in the cache folder yet are requested (see Images).
+    // How images that are not in the cache folder yet are downloaded (see Images).
     void set_image_fetcher(
-        std::function<void(const std::string &address, const std::string &file)> fetcher);
+        std::function<void(const std::string &address, const std::string &file)> fetch,
+        std::function<bool(const std::string &address)> failed);
     void set_account(Account account);
     void set_intent_handler(std::function<void(Intent)> handler);
     // The board row the focus is on, so the host can load rows ahead of it.
@@ -99,9 +100,17 @@ class App
     float scroll_y_ = 0, scroll_y_target_ = 0;
     std::vector<float> scroll_x_, scroll_x_target_;
     float focus_pulse_ = 0; // 0..1, eases to 1 after the focus moves
-    // The featured area fades in afresh whenever a different item takes the focus.
-    std::string hero_item_;
-    float hero_fade_ = 0;
+    // The featured area: the item it shows (a copy, so a board refresh cannot pull it
+    // away), the item the focus is on, how long the focus has rested there, and how
+    // visible its text, title logo and background artwork each are.
+    BoardItem hero_;
+    bool hero_valid_ = false;
+    std::string hero_target_;
+    float hero_dwell_ = 0;
+    float hero_alpha_ = 0;
+    float hero_logo_alpha_ = 0;
+    float hero_art_alpha_ = 0;
+    float frame_seconds_ = 0; // the last update's time step, for fades advanced while drawing
     // How visible each navigation button's label and highlight are, 0..1. A tab's name
     // shows only while the focus is on it, and fades in and out as the focus moves.
     static constexpr int kMaxTabs = 8;

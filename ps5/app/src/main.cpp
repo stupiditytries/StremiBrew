@@ -37,6 +37,8 @@ extern "C"
                                         std::size_t capacity);
     std::size_t stremio_core_last_error(char *out, std::size_t capacity);
     std::int32_t stremio_core_fetch_file(const char *url, const char *path);
+    bool stremio_core_fetch_failed(const char *url);
+    std::size_t stremio_core_trim_folder(const char *folder, std::uint64_t limit);
     void stremio_core_board_load_range(std::uint32_t start, std::uint32_t end);
     void stremio_core_sign_in_start(void);
     void stremio_core_sign_in_cancel(void);
@@ -279,6 +281,11 @@ int main()
     std::remove(kLogFile);
     log_line("start");
     mkdir(kImageFolder, 0777);
+    // Downloaded artwork is kept between runs up to this size; the oldest goes first.
+    constexpr std::uint64_t kImageFolderLimit = std::uint64_t{400} << 20;
+    const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
+    if (trimmed != 0)
+        log_line("image folder: removed %zu old files", trimmed);
 
     Display display;
     if (!display.open())
@@ -299,9 +306,11 @@ int main()
     log_line("drawing ready");
 
     ui::App app{vg, kFontFolder, kImageFolder};
-    app.set_image_fetcher([](const std::string &address, const std::string &file) {
-        stremio_core_fetch_file(address.c_str(), file.c_str());
-    });
+    app.set_image_fetcher(
+        [](const std::string &address, const std::string &file) {
+            stremio_core_fetch_file(address.c_str(), file.c_str());
+        },
+        [](const std::string &address) { return stremio_core_fetch_failed(address.c_str()); });
 
     app.set_intent_handler([](ui::Intent intent) {
         switch (intent)

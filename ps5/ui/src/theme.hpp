@@ -79,6 +79,11 @@ inline constexpr float kHeroLogoHeight = units(6.4f);
 inline constexpr float kHeroTitleSize = units(2.6f);
 inline constexpr float kHeroMetaSize = units(1.1f);
 inline constexpr float kHeroDescriptionSize = units(1.05f);
+// Seconds: how long the focus rests on an item before the featured area switches to it,
+// and how long the area takes to fade out and in.
+inline constexpr float kHeroDwell = 0.30f;
+inline constexpr float kHeroFadeOut = 0.16f;
+inline constexpr float kHeroFadeIn = 0.40f;
 inline NVGcolor imdb_yellow()
 {
     return nvgRGB(245, 197, 24);
