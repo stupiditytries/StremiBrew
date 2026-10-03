@@ -9,11 +9,13 @@
 // In a window the arrow keys, Enter and Backspace are the buttons, and S plays the part
 // of the sign-in code being entered on another device.
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "glad/glad.h"
@@ -257,7 +259,10 @@ int main(int argc, char **argv)
             // settle after each, then save what the last frame drew.
             const auto settle = [&] {
                 for (int count = 0; count < 45; ++count)
+                {
                     frame(1.0f / 60.0f);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(4));
+                }
             };
             settle();
             for (const char letter : keys)

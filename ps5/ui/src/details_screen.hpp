@@ -1,6 +1,10 @@
-// A title's page: its artwork and description on the left, and on the right the list the
-// user picks from: a film's streams, or a series' episodes and then the chosen episode's
-// streams.
+// A title's page, laid out for a television. The title's artwork fills the screen with its
+// logo and key facts at the top left.
+//
+// A series shows its episodes as a row of large tiles along the bottom, under a row of
+// season buttons; the focused episode's name and summary take the place of the series'
+// description. Choosing an episode lists its streams on the right. A film goes straight
+// to its streams, beside its description.
 
 #pragma once
 
@@ -42,20 +46,28 @@ class DetailsScreen
     void draw();
 
   private:
-    enum class List
+    enum class Zone
     {
-        Episodes,
-        Streams,
+        Seasons,  // the row of season buttons
+        Episodes, // the row of episode tiles
+        Streams,  // the list of streams
     };
 
     bool is_series() const;
     std::vector<int> seasons() const;
     std::vector<const Episode *> season_episodes() const;
-    std::size_t row_count() const;
-    void draw_about();
-    void draw_list();
-    float draw_episode(const Episode &episode, float x, float y, float width, bool focused);
-    float draw_stream(const Stream &stream, float x, float y, float width, bool focused);
+    const Episode *episode_by_id(const std::string &id) const;
+    // The episode whose name and summary are shown: the focused tile's, or the one whose
+    // streams are listed.
+    const Episode *shown_episode() const;
+    void follow_focus();
+    void draw_header(float &top);
+    void draw_film_about(float top);
+    void draw_episode_about(float top, const Episode &episode);
+    void draw_seasons();
+    void draw_episodes();
+    void draw_streams();
+    void draw_stream(const Stream &stream, float x, float y, float width, bool focused);
     std::string playing_title(const Episode *episode) const;
 
     NVGcontext *vg_;
@@ -64,12 +76,15 @@ class DetailsScreen
     Details details_;
     std::string opened_name_;
 
-    List list_ = List::Streams;
+    Zone zone_ = Zone::Streams;
     int season_ = 1;
-    std::size_t focus_ = 0;
-    const Episode *chosen_ = nullptr; // the episode whose streams are listed (series)
-    std::string chosen_id_;
-    float scroll_ = 0, scroll_target_ = 0;
-    float appear_ = 0; // 0..1, fades the page in when it opens
+    std::size_t episode_focus_ = 0;
+    std::size_t stream_focus_ = 0;
+    std::string chosen_id_; // the episode whose streams are listed (series)
+    float episodes_scroll_ = 0, episodes_scroll_target_ = 0;
+    float seasons_scroll_ = 0, seasons_scroll_target_ = 0;
+    float streams_scroll_ = 0, streams_scroll_target_ = 0;
+    float appear_ = 0;  // 0..1, fades the page in when it opens
+    float streams_ = 0; // 0..1, how far the stream list has slid in
 };
 } // namespace ui

@@ -477,7 +477,7 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
             h *= scale;
         }
 
-        const Images::Texture texture = images_->get(item.poster);
+        const Images::Texture texture = images_->get(item.poster, kPosterPixels);
         if (texture.state == Images::State::Ready)
         {
             cover_image(vg_, x, y, w, h, kRadius, texture);
@@ -541,7 +541,7 @@ void App::draw_hero()
     const float image_height = kHeroHeight;
     const float image_width = image_height * 16.0f / 9.0f;
     const float image_left = kScreenWidth - image_width;
-    const Images::Texture background = images_->get(item->background);
+    const Images::Texture background = images_->get(item->background, kArtPixels);
     if (background.state == Images::State::Ready)
     {
         if (current)
@@ -568,7 +568,7 @@ void App::draw_hero()
     // The title: the item's logo artwork when it has one. While the logo is on its way
     // the space stays empty; the name is written out only for an item that has no logo,
     // whose logo could not be had or has nothing in it, or whose logo is taking too long.
-    const Images::Texture logo = images_->get(item->logo);
+    const Images::Texture logo = images_->get(item->logo, kLogoPixels);
     if (logo.state == Images::State::Pending && current)
         hero_logo_wait_ += frame_seconds_;
     const bool give_up = logo.state == Images::State::Pending && hero_logo_wait_ > kHeroLogoWait;

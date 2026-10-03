@@ -25,6 +25,7 @@
 #include "account_data.hpp"
 #include "app.hpp"
 #include "board_data.hpp"
+#include "core_link.hpp"
 #include "details_data.hpp"
 #include "pad.hpp"
 #include "theme.hpp"
@@ -55,11 +56,8 @@ extern "C"
 namespace
 {
 constexpr char kLogFile[] = "/download0/app.log";
-constexpr char kStorageFolder[] = "/download0/stremio";
-constexpr char kImageFolder[] = "/download0/images";
-constexpr char kFontFolder[] = "/app0/assets/fonts";
+} // namespace
 
-void log_line(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void log_line(const char *format, ...)
 {
     char text[512];
@@ -78,6 +76,13 @@ void log_line(const char *format, ...)
     std::snprintf(line, sizeof line, "[stremio] %s\n", text);
     sceKernelDebugOutText(0, line);
 }
+
+namespace
+{
+constexpr char kStorageFolder[] = "/download0/stremio";
+constexpr char kImageFolder[] = "/download0/images";
+constexpr char kFontFolder[] = "/app0/assets/fonts";
+
 
 double seconds_now()
 {
@@ -270,20 +275,6 @@ class Canvas
     GLuint framebuffer_ = 0, color_ = 0, stencil_ = 0, program_ = 0, vertex_array_ = 0;
 };
 
-// Reads the board's rows from the core and hands them to the UI.
-void refresh_board(ui::App &app, std::vector<char> &buffer)
-{
-    const std::size_t length = stremio_core_board_rows(20, buffer.data(), buffer.size());
-    if (length == 0 || length >= buffer.size())
-        return;
-    std::vector<ui::BoardRow> rows;
-    if (ui::parse_board(std::string_view{buffer.data(), length}, rows))
-        app.set_board(std::move(rows));
-}
-
-// How many board rows are requested at a time, and how far ahead of the focus.
-constexpr std::uint32_t kRowBatch = 8;
-constexpr std::uint32_t kRowsAhead = 4;
 } // namespace
 
 int main()
@@ -291,8 +282,6 @@ int main()
     std::remove(kLogFile);
     log_line("start");
     mkdir(kImageFolder, 0777);
-    // Downloaded artwork is kept between runs up to this size; the oldest goes first.
-    constexpr std::uint64_t kImageFolderLimit = std::uint64_t{400} << 20;
 
     Display display;
     if (!display.open())
@@ -319,27 +308,32 @@ int main()
         },
         [](const std::string &address) { return stremio_core_fetch_failed(address.c_str()); });
 
-    app.set_intent_handler([](ui::Intent intent) {
-        switch (intent)
-        {
-        case ui::Intent::SignIn:
-            stremio_core_sign_in_start();
-            break;
-        case ui::Intent::CancelSignIn:
-            stremio_core_sign_in_cancel();
-            break;
-        case ui::Intent::SignOut:
-            stremio_core_sign_out();
-            break;
-        }
+    // Everything asked of the core goes through the link's thread (see core_link.hpp).
+    ps5::CoreLink core;
+    app.set_intent_handler([&core](ui::Intent intent) {
+        core.post([intent] {
+            switch (intent)
+            {
+            case ui::Intent::SignIn:
+                stremio_core_sign_in_start();
+                break;
+            case ui::Intent::CancelSignIn:
+                stremio_core_sign_in_cancel();
+                break;
+            case ui::Intent::SignOut:
+                stremio_core_sign_out();
+                break;
+            }
+        });
     });
-
     app.set_title_handler({
-        [](const std::string &type, const std::string &id) {
-            stremio_core_load_details(type.c_str(), id.c_str(), nullptr);
+        [&core](const std::string &type, const std::string &id) {
+            core.post([type, id] { stremio_core_load_details(type.c_str(), id.c_str(), nullptr); });
         },
-        [](const std::string &type, const std::string &id, const std::string &video) {
-            stremio_core_load_details(type.c_str(), id.c_str(), video.c_str());
+        [&core](const std::string &type, const std::string &id, const std::string &video) {
+            core.post([type, id, video] {
+                stremio_core_load_details(type.c_str(), id.c_str(), video.c_str());
+            });
         },
         [] {},
         [](const ui::Stream &stream, const std::string &title) {
@@ -348,9 +342,6 @@ int main()
         },
     });
 
-    // Rows of the board requested from the core so far; more are requested as the focus
-    // nears the last of them.
-    std::uint32_t rows_requested = 0;
     if (stremio_core_init(kStorageFolder) != 0)
     {
         char error[256] = {};
@@ -360,101 +351,64 @@ int main()
     else
     {
         log_line("core started");
-        stremio_core_load_board(kRowBatch);
-        rows_requested = kRowBatch;
-        log_line("board requested");
-        const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
-        log_line("image folder: removed %zu old files", trimmed);
+        core.start();
+        core.post([] {
+            // Downloaded artwork is kept between runs up to this size; the oldest goes first.
+            constexpr std::uint64_t kImageFolderLimit = std::uint64_t{400} << 20;
+            const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
+            log_line("image folder: removed %zu old files", trimmed);
+        });
     }
 
     ps5::Pad pad;
     log_line("controller %s", pad.open() ? "ready" : "not available");
 
-    std::vector<char> text(2 << 20);
     double previous = seconds_now();
-    double account_checked = 0;
-    ui::Account account;
-    bool account_known = false;
+    double slow_logged = 0;
     unsigned long frames = 0;
     for (;;)
     {
-        // The first frames say which stage they reach, to place a start-up failure.
-        const bool trace = frames < 3;
-        const auto stage = [&](const char *name) {
-            if (trace)
-                log_line("frame %lu: %s", frames + 1, name);
-        };
+        const double frame_start = seconds_now();
 
-        // The core announces changes as events; the board is re-read after any of them.
-        stage("events");
-        bool changed = false;
-        while (stremio_core_poll_event(text.data(), text.size()) != 0)
-            changed = true;
-        stage("account");
-
-        // The account is looked at after every change and every two seconds, which is also
-        // when a sign-in in progress is moved along (see the bridge's account.rs).
-        if (changed || seconds_now() - account_checked > 2.0)
-        {
-            account_checked = seconds_now();
-            stremio_core_account_advance();
-            const std::size_t length = stremio_core_account(text.data(), text.size());
-            ui::Account latest;
-            if (length != 0 && length < text.size() &&
-                ui::parse_account(std::string_view{text.data(), length}, latest))
-            {
-                // Signing in or out, or the account's add-ons arriving, changes which
-                // catalogs the board has: it is loaded afresh.
-                if (account_known &&
-                    (latest.signed_in != account.signed_in || latest.addons != account.addons))
-                {
-                    log_line("account changed: signed %s, %d add-ons",
-                             latest.signed_in ? "in" : "out", latest.addons);
-                    stremio_core_load_board(kRowBatch);
-                    rows_requested = kRowBatch;
-                    changed = true;
-                }
-                account = latest;
-                account_known = true;
-                app.set_account(account);
-            }
-        }
-        stage("board");
-        if (changed)
-            refresh_board(app, text);
-        // While a title's page is open, its details are re-read after every change (the
-        // add-ons answer one by one).
-        if (changed && app.title_open())
-        {
-            const std::size_t length = stremio_core_details(text.data(), text.size());
-            ui::Details details;
-            if (length != 0 && length < text.size() &&
-                ui::parse_details(std::string_view{text.data(), length}, details))
-                app.set_details(std::move(details));
-        }
-        if (rows_requested != 0 && app.focused_catalog() + kRowsAhead >= rows_requested)
-        {
-            stremio_core_board_load_range(rows_requested, rows_requested + kRowBatch);
-            rows_requested += kRowBatch;
-        }
+        // Whatever the core's thread has ready is applied between frames.
+        std::vector<ui::BoardRow> rows;
+        if (core.take_board(rows))
+            app.set_board(std::move(rows));
+        ui::Details details;
+        if (core.take_details(details))
+            app.set_details(std::move(details));
+        ui::Account account;
+        if (core.take_account(account))
+            app.set_account(std::move(account));
+        core.set_focused_catalog(app.focused_catalog());
+        core.set_title_open(app.title_open());
 
         const double now = seconds_now();
         const float elapsed = static_cast<float>(now - previous);
         previous = now;
         pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
+        const double applied = seconds_now();
 
-        stage("update");
         canvas.begin();
         app.update(elapsed);
-        stage("draw");
         app.draw(width, height);
-        stage("show");
+        const double drawn = seconds_now();
         canvas.show(display.width, display.height);
-        stage("present");
         if (!display.present())
         {
             log_line("present failed (0x%x)", eglGetError());
             break;
+        }
+        const double presented = seconds_now();
+
+        // A frame that takes much longer than the screen's 16.7 ms is a visible stutter;
+        // each is reported (at most once a second) with where its time went.
+        if (presented - frame_start > 0.030 && frames > 120 && presented - slow_logged > 1.0)
+        {
+            slow_logged = presented;
+            log_line("slow frame: %.0f ms (data and input %.1f, drawing %.1f, presenting %.1f)",
+                     (presented - frame_start) * 1e3, (applied - frame_start) * 1e3,
+                     (drawn - applied) * 1e3, (presented - drawn) * 1e3);
         }
 
         if (++frames == 1 || frames == 120 || frames % 3600 == 0)

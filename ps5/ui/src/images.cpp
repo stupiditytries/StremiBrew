@@ -1,5 +1,6 @@
 #include "images.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -132,13 +133,48 @@ Images::Decoded Images::decode(const Job &job)
     }
     if (right >= left && bottom >= top)
     {
-        result.width = width;
-        result.height = height;
-        result.content_x = left;
-        result.content_y = top;
-        result.content_width = right - left + 1;
-        result.content_height = bottom - top + 1;
-        result.pixels.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
+        // Shrink by a whole factor (averaging each block of pixels) when the image is at
+        // least twice as wide as it is ever drawn. Textures have no smaller copies of
+        // themselves to fall back on, so this is also what keeps a big image from
+        // shimmering when drawn small.
+        const int factor = job.max_width > 0 ? std::max(1, width / job.max_width) : 1;
+        const int out_width = width / factor, out_height = height / factor;
+        result.width = out_width;
+        result.height = out_height;
+        result.content_x = left / factor;
+        result.content_y = top / factor;
+        result.content_width = std::max(1, std::min(out_width - result.content_x, (right - left + factor) / factor));
+        result.content_height = std::max(1, std::min(out_height - result.content_y, (bottom - top + factor) / factor));
+        if (factor == 1)
+        {
+            result.pixels.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
+        }
+        else
+        {
+            result.pixels.resize(static_cast<std::size_t>(out_width) * out_height * 4);
+            const unsigned area = static_cast<unsigned>(factor * factor);
+            for (int y = 0; y < out_height; ++y)
+                for (int x = 0; x < out_width; ++x)
+                {
+                    unsigned sum[4] = {0, 0, 0, 0};
+                    for (int dy = 0; dy < factor; ++dy)
+                    {
+                        const unsigned char *source =
+                            pixels + (static_cast<std::size_t>(y * factor + dy) * width + x * factor) * 4;
+                        for (int dx = 0; dx < factor; ++dx, source += 4)
+                        {
+                            sum[0] += source[0];
+                            sum[1] += source[1];
+                            sum[2] += source[2];
+                            sum[3] += source[3];
+                        }
+                    }
+                    unsigned char *target =
+                        result.pixels.data() + (static_cast<std::size_t>(y) * out_width + x) * 4;
+                    for (int channel = 0; channel < 4; ++channel)
+                        target[channel] = static_cast<unsigned char>(sum[channel] / area);
+                }
+        }
     }
     if (webp)
         WebPFree(pixels);
@@ -185,8 +221,8 @@ void Images::begin_frame()
         Entry entry;
         entry.last_used = frame_;
         if (!image.pixels.empty())
-            entry.texture.handle = nvgCreateImageRGBA(context_, image.width, image.height,
-                                                      NVG_IMAGE_GENERATE_MIPMAPS, image.pixels.data());
+            entry.texture.handle =
+                nvgCreateImageRGBA(context_, image.width, image.height, 0, image.pixels.data());
         if (entry.texture.handle != 0)
         {
             entry.texture.state = State::Ready;
@@ -196,8 +232,7 @@ void Images::begin_frame()
             entry.texture.content_y = image.content_y;
             entry.texture.content_width = image.content_width;
             entry.texture.content_height = image.content_height;
-            // Four bytes a pixel, plus a third for the smaller copies used when drawn small.
-            entry.bytes = static_cast<std::size_t>(image.width) * image.height * 16 / 3;
+            entry.bytes = static_cast<std::size_t>(image.width) * image.height * 4;
             texture_bytes_ += entry.bytes;
         }
         // An image that could not be used is remembered too, as unavailable.
@@ -264,7 +299,7 @@ void Images::prefetch(const std::string &address)
     request(address, file);
 }
 
-Images::Texture Images::get(const std::string &address)
+Images::Texture Images::get(const std::string &address, int max_width)
 {
     if (address.empty())
         return {};
@@ -299,7 +334,7 @@ Images::Texture Images::get(const std::string &address)
     decoding_.insert(address);
     {
         const std::lock_guard<std::mutex> lock{mutex_};
-        jobs_.push_back(Job{address, file});
+        jobs_.push_back(Job{address, file, max_width});
     }
     wake_.notify_one();
     return pending;

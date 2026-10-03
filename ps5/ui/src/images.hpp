@@ -53,8 +53,11 @@ class Images
     };
 
     // The texture for `address`. The first request starts the work; the texture is ready
-    // some frames later.
-    Texture get(const std::string &address);
+    // some frames later. `max_width` is the widest the image is drawn, in screen pixels:
+    // a larger image is shrunk to about that before it becomes a texture, which keeps
+    // big source images (some add-ons send 800 px squares for a 200 px tile) from
+    // costing upload time and memory. The first request's value is the one used.
+    Texture get(const std::string &address, int max_width);
     // Starts downloading `address` if it is not in the folder, without making a texture:
     // for images that are likely to be wanted soon.
     void prefetch(const std::string &address);
@@ -68,7 +71,7 @@ class Images
     void set_fetcher(Fetch fetch, Failed failed);
 
   private:
-    static constexpr int kUploadsPerFrame = 2; // decoded images turned into textures a frame
+    static constexpr int kUploadsPerFrame = 1; // decoded images turned into textures a frame
     static constexpr int kWorkers = 2;
     // Textures are kept up to this many bytes; beyond it, those not drawn recently go.
     static constexpr std::size_t kTextureBudget = std::size_t{320} << 20;
@@ -89,6 +92,7 @@ class Images
     {
         std::string address;
         std::string file;
+        int max_width = 0;
     };
     struct Decoded
     {

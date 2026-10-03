@@ -47,10 +47,10 @@ inline constexpr float kFocusOutline = units(0.2f);
 
 // Navigation column on the left and the bar across the top.
 inline constexpr float kNavWidth = units(6.0f);
-inline constexpr float kNavButton = units(4.8f);
+inline constexpr float kNavButton = units(4.5f);
 inline constexpr float kNavIcon = units(1.5f);
 inline constexpr float kNavIconRise = units(0.45f); // how far above its button's centre an icon sits
-inline constexpr float kNavGap = units(1.0f);
+inline constexpr float kNavGap = units(0.25f);
 inline constexpr float kNavLabelSize = units(0.8f);
 inline constexpr float kTopBarHeight = units(5.5f);
 inline constexpr float kSearchWidth = units(30.0f);
@@ -86,6 +86,11 @@ inline constexpr float kHeroFadeOut = 0.16f;
 inline constexpr float kHeroFadeIn = 0.40f;
 // Seconds to wait for a title's logo before writing its name out instead.
 inline constexpr float kHeroLogoWait = 2.5f;
+// The widest each kind of image is drawn, in pixels of a 4K screen (see Images::get).
+inline constexpr int kPosterPixels = 480;
+inline constexpr int kArtPixels = 2200;
+inline constexpr int kLogoPixels = 900;
+inline constexpr int kStillPixels = 900;
 inline NVGcolor imdb_yellow()
 {
     return nvgRGB(245, 197, 24);
