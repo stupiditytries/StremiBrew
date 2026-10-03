@@ -22,6 +22,13 @@ if [[ $RUST_TARGET == *.json ]]; then
     # use the layouts from before FreeBSD 12, which is what the libc crate assumes by default.
     export RUSTFLAGS='--cfg libc_unstable_freebsd_version="11"'
     bash "$REPO/ps5/patch-rust-src.sh"
+    # C and assembly inside Rust crates (the TLS library's cryptography) are compiled with
+    # the SDK's compiler settings.
+    mkdir -p "$WORK/bin"
+    printf '#!/bin/sh\nPS5_PAYLOAD_SDK=%s exec sh %s/tooling/prospero-clang18 "$@"\n' \
+        "$sdk" "$TEMPLATE" > "$WORK/bin/ps5-cc"
+    chmod +x "$WORK/bin/ps5-cc"
+    export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
 fi
 (cd "$REPO/ps5/spike-rust" && CARGO_TARGET_DIR=$WORK/target-spike cargo "${cargo_args[@]}")
 triple=$(basename "$RUST_TARGET" .json)

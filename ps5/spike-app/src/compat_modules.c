@@ -56,6 +56,14 @@ void arc4random_buf(void *buffer, size_t size)
     }
 }
 
+/* FreeBSD 12's entropy call, which the console's FreeBSD 11 kernel module lacks. */
+ssize_t getrandom(void *buffer, size_t size, unsigned int flags)
+{
+    (void)flags;
+    arc4random_buf(buffer, size);
+    return (ssize_t)size;
+}
+
 int pthread_setname_np(pthread_t thread, const char *name)
 {
     pthread_set_name_np(thread, name);

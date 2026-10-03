@@ -186,3 +186,26 @@ pub extern "C" fn spike_http_status(host: *const c_char) -> i32 {
         .and_then(|code| code.parse().ok())
         .unwrap_or(-6)
 }
+
+/// Requests `url` over HTTPS and returns the status code, or -1 with the error in the
+/// detail text. On success the detail text holds the first bytes of the body.
+#[no_mangle]
+pub extern "C" fn spike_https_status(url: *const c_char) -> i32 {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(20))
+        .build();
+    match agent.get(c_str(url)).call() {
+        Ok(response) => {
+            let status = response.status() as i32;
+            let mut body = String::new();
+            let _ = response.into_reader().take(120).read_to_string(&mut body);
+            set_detail(body.replace(['\r', '\n'], " "));
+            status
+        }
+        Err(ureq::Error::Status(code, _)) => code as i32,
+        Err(error) => {
+            set_detail(format!("https: {error}"));
+            -1
+        }
+    }
+}

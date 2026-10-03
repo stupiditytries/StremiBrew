@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[dependencies]
+# HTTPS client with a pure-Rust TLS stack (rustls + ring) and bundled root certificates.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
 [workspace]
 
 [profile.release]

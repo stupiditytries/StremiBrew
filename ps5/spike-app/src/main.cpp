@@ -14,13 +14,14 @@ extern "C"
     std::uint64_t spike_wall_clock_ms();
     std::uint64_t spike_monotonic_ms(std::uint32_t ms);
     std::int32_t spike_http_status(const char *host);
+    std::int32_t spike_https_status(const char *url);
     void spike_detail(char *out, std::size_t capacity);
     void net_diag(void (*log)(const char *));
 }
 
 namespace
 {
-constexpr unsigned kLineCount = 6;
+constexpr unsigned kLineCount = 7;
 char lines[kLineCount][64];
 
 // Appends one line to the log and closes it, so a crash in the next step still leaves the
@@ -66,9 +67,14 @@ void record_results() noexcept
                   spike_http_status("example.com"));
     log_line(lines[4]);
     log_detail();
-    net_diag([](const char *text) { log_line(text); });
-    std::snprintf(lines[5], sizeof lines[5], "DONE");
+    log_line("BEGIN HTTPS");
+    std::snprintf(lines[5], sizeof lines[5], "HTTPS STREMIO API %d",
+                  spike_https_status("https://api.strem.io/api/addonCollectionGet"));
     log_line(lines[5]);
+    log_detail();
+    net_diag([](const char *text) { log_line(text); });
+    std::snprintf(lines[6], sizeof lines[6], "DONE");
+    log_line(lines[6]);
 }
 
 void draw_scene(ps5::demo::Canvas &canvas) noexcept
@@ -78,7 +84,7 @@ void draw_scene(ps5::demo::Canvas &canvas) noexcept
     canvas.clear(Color::background);
     canvas.text(120, 90, "RUST STD SPIKE", 10, Color::white);
     for (unsigned index = 0; index < kLineCount; ++index)
-        canvas.text(120, 300 + index * 110, lines[index], 6, Color::cyan);
+        canvas.text(120, 280 + index * 100, lines[index], 6, Color::cyan);
 }
 } // namespace
 
