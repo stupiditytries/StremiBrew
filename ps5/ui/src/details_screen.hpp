@@ -47,12 +47,8 @@ class DetailsScreen
     DetailsScreen(NVGcontext *context, Images &images);
 
     void set_callbacks(Callbacks callbacks);
-    // Where the board draws the focused title's logo, so the page's logo can start there
-    // and glide to its own place as the page opens (and back as it closes).
-    void set_origin(float x, float y);
-    // 0 while the page is not showing, 1 once it covers the screen; in between while it
-    // opens or closes, when whatever is behind it should still be drawn.
-    float opacity() const;
+    // Starts the page's closing animation; `Callbacks::close` is called when it is done.
+    void leave();
     // Starts showing a title, known so far only by what the board had about it.
     void open(const std::string &type, const std::string &id, const std::string &name);
     void set_details(Details details);
@@ -82,6 +78,7 @@ class DetailsScreen
     void draw_seasons();
     void draw_episodes();
     void draw_streams();
+    void draw_backdrop(float alpha);
     void draw_stream(const Stream &stream, float x, float y, float width, bool focused);
     std::string playing_title(const Episode *episode) const;
 
@@ -102,7 +99,6 @@ class DetailsScreen
     float appear_ = 0;    // 0..1, how far the page has opened
     bool closing_ = false; // running the opening backwards before telling the owner
     float streams_ = 0;   // 0..1, how far the stream list has slid in
-    float origin_x_ = 0, origin_y_ = 0;
     // The episode whose name and summary are on screen. It trails the focus: the text
     // fades out, switches, and fades in.
     Episode about_;

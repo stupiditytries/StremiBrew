@@ -69,7 +69,7 @@ class App
     void set_details(Details details);
     bool title_open() const
     {
-        return title_open_;
+        return title_open_ || veil_rising_;
     }
     void set_intent_handler(std::function<void(Intent)> handler);
     // The catalog (by its position among all of the board's catalogs) of the row the
@@ -114,6 +114,12 @@ class App
     TitleHandler title_handler_;
     std::unique_ptr<DetailsScreen> details_;
     bool title_open_ = false;
+    // Going between the board and a title's page fades through black, so that the two
+    // are never both on screen: 0 is the board, 1 is black.
+    float veil_ = 0;
+    bool veil_rising_ = false; // heading for a title's page
+    std::string pending_type_, pending_id_, pending_name_;
+    Details pending_known_;
     std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
 

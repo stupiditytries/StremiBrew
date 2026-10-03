@@ -42,7 +42,6 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
     font("bold", "PlusJakartaSans-Bold.ttf");
 
     details_ = std::make_unique<DetailsScreen>(vg_, *images_);
-    details_->set_origin(kNavWidth + kContentInset + kCardPadding, kHeroTextTop);
     details_->set_callbacks({
         [this](const std::string &video) {
             if (title_handler_.select_video)
@@ -78,6 +77,8 @@ void App::set_details(Details details)
 {
     if (title_open_)
         details_->set_details(std::move(details));
+    else if (veil_rising_ && details.id == pending_id_)
+        pending_known_ = std::move(details);
 }
 
 void App::set_account(Account account)
@@ -191,6 +192,8 @@ void App::press(Button button)
         details_->press(button);
         return;
     }
+    if (veil_rising_)
+        return; // on the way to a title's page
     switch (zone_)
     {
     case Zone::Navigation:
@@ -260,8 +263,11 @@ void App::press(Button button)
             {
                 title_type_ = item->type;
                 title_id_ = item->id;
-                title_open_ = true;
-                details_->open(item->type, item->id, item->name);
+                // The board fades out first; the page opens once it has (see update).
+                veil_rising_ = true;
+                pending_type_ = item->type;
+                pending_id_ = item->id;
+                pending_name_ = item->name;
                 // What the board already knows shows at once; the rest follows.
                 Details known;
                 known.type = item->type;
@@ -275,7 +281,7 @@ void App::press(Button button)
                 known.imdb_rating = item->imdb_rating;
                 known.genres = item->genres;
                 known.streams_loading = 1;
-                details_->set_details(std::move(known));
+                pending_known_ = std::move(known);
                 if (title_handler_.open)
                     title_handler_.open(item->type, item->id);
             }
@@ -295,6 +301,22 @@ void App::update(float seconds)
 {
     if (title_open_)
         details_->update(seconds);
+    constexpr float kVeilTime = 0.12f;
+    if (veil_rising_)
+    {
+        veil_ = std::min(1.0f, veil_ + seconds / kVeilTime);
+        if (veil_ >= 1.0f)
+        {
+            veil_rising_ = false;
+            title_open_ = true;
+            details_->open(pending_type_, pending_id_, pending_name_);
+            details_->set_details(std::move(pending_known_));
+        }
+    }
+    else if (!title_open_)
+    {
+        veil_ = std::max(0.0f, veil_ - seconds / kVeilTime);
+    }
 
     scroll_y_ = eased(scroll_y_, scroll_y_target_, seconds);
     for (std::size_t row = 0; row < scroll_x_.size(); ++row)
@@ -806,9 +828,9 @@ void App::draw(int width, int height)
     nvgFillColor(vg_, background());
     nvgFill(vg_);
 
-    if (title_open_ && details_->opacity() >= 0.999f)
+    if (title_open_)
     {
-        // A title's page takes the whole screen once it has opened.
+        // A title's page takes the whole screen.
         details_->draw();
         nvgEndFrame(vg_);
         return;
@@ -828,9 +850,14 @@ void App::draw(int width, int height)
     }
     draw_top_bar();
     draw_navigation();
-    // While a title's page opens or closes it is drawn over the board.
-    if (title_open_)
-        details_->draw();
+    // On the way to or from a title's page the board is under a veil of black.
+    if (veil_ > 0.0f)
+    {
+        nvgBeginPath(vg_);
+        nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, veil_));
+        nvgFill(vg_);
+    }
 
     nvgEndFrame(vg_);
 }
