@@ -446,7 +446,7 @@ void DetailsScreen::draw_episode_about(float top, const Episode &episode)
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(0.95f));
-    nvgFillColor(vg_, accent(fade));
+    nvgFillColor(vg_, foreground(0.9f * fade));
     std::string place = "Season " + std::to_string(episode.season) + "  \xC2\xB7  Episode " +
                         std::to_string(episode.episode);
     if (episode.season == 0)

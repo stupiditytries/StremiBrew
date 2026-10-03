@@ -57,7 +57,12 @@ done < <(find "$ui/third_party/libwebp/src/dec" "$ui/third_party/libwebp/src/dsp
 compile() {
     local source=$1 object
     object=$out/obj/$(echo "${source#/}" | tr '/' '_').o
-    if [[ $object -nt $source && $object -nt $REPO/ps5/app/build.sh ]]; then
+    # Only third-party sources keep their object between builds. The app's own files are
+    # compiled every time: they include each other's headers, and an object built against
+    # an older header (a class that has since gained a member, say) links without complaint
+    # and then corrupts memory at run time.
+    if [[ $source == */third_party/* && $object -nt $source &&
+        $object -nt $REPO/ps5/app/build.sh ]]; then
         return 0
     fi
     case $source in
