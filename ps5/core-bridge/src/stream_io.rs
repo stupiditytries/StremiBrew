@@ -23,9 +23,19 @@ static HTTP: Lazy<ureq::Agent> = Lazy::new(|| {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(20))
+        // Several readers work on one video at once (playback, and the workers that
+        // make the scrubbing pictures); each keeps its connection for its next request.
+        .max_idle_connections(32)
+        .max_idle_connections_per_host(24)
         .user_agent("stremio-ps5")
         .build()
 });
+
+/// Where each address really leads. An add-on's stream address usually only redirects to
+/// the server that has the file (after looking the file up, which can take a second or
+/// more); asking that server directly from the second request on saves the detour on
+/// every seek.
+static RESOLVED: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(Default::default);
 
 /// Moving forward by no more than this is done by reading and discarding, which is
 /// quicker than a new connection.
@@ -147,16 +157,25 @@ pub struct HttpStream {
     /// The open response, and where in the file its next byte is.
     body: Option<Box<dyn Read + Send + Sync>>,
     body_position: u64,
+    /// When set, the file is asked for this many bytes at a time instead of "from here
+    /// to the end". A response read to its end leaves its connection usable for the next
+    /// request, which a reader that jumps about the file (the scrubbing pictures) gains
+    /// from: no new connection for each jump.
+    piece: Option<u64>,
+    /// Where the open response ends, when the file is read in pieces.
+    body_end: u64,
 }
 
 impl HttpStream {
-    fn open(url: &str) -> Option<Self> {
+    fn open(url: &str, piece: Option<u64>) -> Option<Self> {
         let mut stream = HttpStream {
             url: url.to_owned(),
             position: 0,
             size: None,
             body: None,
             body_position: 0,
+            piece,
+            body_end: 0,
         };
         stream.connect().ok()?;
         if let Some(cache) = CACHE.lock().unwrap().as_mut() {
@@ -168,16 +187,38 @@ impl HttpStream {
     /// Opens a response that starts at `position`. `Ok(false)` means the position is at
     /// or past the end of the file.
     fn connect(&mut self) -> Result<bool, String> {
+        // What is left of a piece is read out, so its connection can be used again.
+        if let (Some(_), Some(mut body)) = (self.piece, self.body.take()) {
+            let _ = std::io::copy(&mut body, &mut std::io::sink());
+        }
         self.body = None;
-        let response = match HTTP
-            .get(&self.url)
-            .set("Range", &format!("bytes={}-", self.position))
-            .call()
-        {
+        let range = match self.piece {
+            Some(piece) => format!("bytes={}-{}", self.position, self.position + piece - 1),
+            None => format!("bytes={}-", self.position),
+        };
+        let direct = RESOLVED.lock().ok().and_then(|known| known.get(&self.url).cloned());
+        let mut answer = HTTP
+            .get(direct.as_deref().unwrap_or(&self.url))
+            .set("Range", &range)
+            .call();
+        if direct.is_some() && matches!(answer, Err(ureq::Error::Status(code, _)) if code != 416) {
+            // The direct address has stopped working (such links expire): back to the
+            // add-on's own, which finds the file again.
+            if let Ok(mut known) = RESOLVED.lock() {
+                known.remove(&self.url);
+            }
+            answer = HTTP.get(&self.url).set("Range", &range).call();
+        }
+        let response = match answer {
             Ok(response) => response,
             Err(ureq::Error::Status(416, _)) => return Ok(false),
             Err(error) => return Err(error.to_string()),
         };
+        if response.get_url() != self.url {
+            if let Ok(mut known) = RESOLVED.lock() {
+                known.insert(self.url.clone(), response.get_url().to_owned());
+            }
+        }
         let total = response
             .header("Content-Range")
             .and_then(|range| range.rsplit('/').next())
@@ -188,11 +229,14 @@ impl HttpStream {
         if response.status() == 206 {
             self.size = total.or(length.map(|length| self.position + length)).or(self.size);
             self.body_position = self.position;
+            self.body_end = self.position + length.unwrap_or(u64::MAX / 2);
             self.body = Some(response.into_reader());
         } else {
             // The server ignored the range and is sending the file from its start.
             self.size = length.or(self.size);
             self.body_position = 0;
+            self.body_end = u64::MAX / 2;
+            self.piece = None;
             self.body = Some(response.into_reader());
             if self.position > 64 * SKIP_LIMIT {
                 self.body = None;
@@ -232,7 +276,8 @@ impl HttpStream {
         loop {
             let near = self.body.is_some()
                 && self.position >= self.body_position
-                && self.position - self.body_position <= SKIP_LIMIT;
+                && self.position - self.body_position <= SKIP_LIMIT
+                && (self.piece.is_none() || self.position < self.body_end);
             if !near {
                 match self.connect() {
                     Ok(true) => {}
@@ -271,6 +316,10 @@ impl HttpStream {
                 Some(Ok(_)) if self.size.map_or(true, |size| self.position >= size) => {
                     return Ok(0)
                 }
+                // The end of a piece: the next one is asked for.
+                Some(Ok(_)) if self.piece.is_some() && self.position >= self.body_end => {
+                    self.body_end = 0;
+                }
                 Some(Ok(_)) | Some(Err(_)) | None => {
                     self.body = None;
                     failures += 1;
@@ -292,7 +341,23 @@ pub extern "C" fn stremio_http_open(url: *const c_char) -> *mut HttpStream {
     let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() else {
         return std::ptr::null_mut();
     };
-    match HttpStream::open(url) {
+    match HttpStream::open(url, None) {
+        Some(stream) => Box::into_raw(Box::new(stream)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Opens `url` for a reader that jumps about the file: it is asked for `piece` bytes at a
+/// time (see `HttpStream::piece`). Null when the address cannot be opened.
+#[no_mangle]
+pub extern "C" fn stremio_http_open_pieces(url: *const c_char, piece: u64) -> *mut HttpStream {
+    if url.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() else {
+        return std::ptr::null_mut();
+    };
+    match HttpStream::open(url, Some(piece.max(64 * 1024))) {
         Some(stream) => Box::into_raw(Box::new(stream)),
         None => std::ptr::null_mut(),
     }

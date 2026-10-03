@@ -30,6 +30,7 @@ extern "C"
 
 struct HttpStream;
 HttpStream *stremio_http_open(const char *url);
+HttpStream *stremio_http_open_pieces(const char *url, std::uint64_t piece);
 std::int64_t stremio_http_read(HttpStream *stream, std::uint8_t *buffer, std::size_t length);
 void stremio_http_seek(HttpStream *stream, std::uint64_t position);
 std::int64_t stremio_http_size(const HttpStream *stream);
@@ -66,7 +67,10 @@ constexpr int kThumbsMost = 150;
 // How many of them are fetched at once. Each one is a separate request to the server for
 // a different part of the file, and it is those requests, not the decoding, that take
 // the time; several at once cut it accordingly.
-constexpr int kThumbWorkers = 6;
+constexpr int kThumbWorkers = 12;
+// The workers read the file a piece at a time (see the bridge's stream_io.rs).
+constexpr std::uint64_t kThumbPiece = 384 * 1024;
+constexpr int kThumbIoBuffer = 128 * 1024;
 
 double now_seconds()
 {
@@ -173,18 +177,23 @@ struct Input
     }
 
     // Opens the address and reads what streams the file has. On failure `why` says what
-    // went wrong.
-    bool open(const std::string &url, std::atomic<bool> &stop_flag, std::string &why)
+    // went wrong. `browsing` is for a reader that only jumps about the file for single
+    // pictures: it reads in pieces, and skips the probing of the streams that playing
+    // needs (the file's header says enough to decode a picture).
+    bool open(const std::string &url, std::atomic<bool> &stop_flag, std::string &why,
+              bool browsing = false)
     {
         stop = &stop_flag;
-        http = stremio_http_open(url.c_str());
+        http = browsing ? stremio_http_open_pieces(url.c_str(), kThumbPiece)
+                        : stremio_http_open(url.c_str());
         if (http == nullptr)
         {
             why = "The stream's address did not answer.";
             return false;
         }
-        auto *buffer = static_cast<std::uint8_t *>(av_malloc(kIoBuffer));
-        io = avio_alloc_context(buffer, kIoBuffer, 0, this, read, nullptr, seek);
+        const int buffer_size = browsing ? kThumbIoBuffer : kIoBuffer;
+        auto *buffer = static_cast<std::uint8_t *>(av_malloc(buffer_size));
+        io = avio_alloc_context(buffer, buffer_size, 0, this, read, nullptr, seek);
         format = avformat_alloc_context();
         format->pb = io;
         format->flags |= AVFMT_FLAG_CUSTOM_IO;
@@ -197,7 +206,7 @@ struct Input
             why = "The file is not a video this app can read (" + ffmpeg_error(result) + ").";
             return false;
         }
-        result = avformat_find_stream_info(format, nullptr);
+        result = browsing ? 0 : avformat_find_stream_info(format, nullptr);
         if (result < 0)
         {
             why = "The video's streams could not be read (" + ffmpeg_error(result) + ").";
@@ -1217,7 +1226,7 @@ struct Player::Session
     {
         Input second;
         std::string why;
-        if (!second.open(url, stop, why))
+        if (!second.open(url, stop, why, true))
         {
             note("scrubbing pictures not available: %s", why.c_str());
             return;
@@ -1229,7 +1238,7 @@ struct Player::Session
         decoder->skip_frame = AVDISCARD_NONKEY;
         AVPacket *packet = av_packet_alloc();
         AVFrame *frame = av_frame_alloc();
-        const double first = second.origin();
+        const double first = origin; // the same file as the one playing
         const double started = now_seconds();
         const int count = static_cast<int>(thumb_order.size());
         while (!stop)
