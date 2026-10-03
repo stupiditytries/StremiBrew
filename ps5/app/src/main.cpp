@@ -347,6 +347,33 @@ int main()
         },
     });
     app.set_player_handler(playing.handler());
+    // How subtitles look is kept in a small file of the app's own: four whole numbers.
+    static constexpr char kSubtitleStyleFile[] = "/download0/stremio/subtitle-style.txt";
+    {
+        ui::SubtitleStyle style;
+        int bold = 0;
+        if (std::FILE *file = std::fopen(kSubtitleStyleFile, "r"))
+        {
+            ui::SubtitleStyle saved;
+            if (std::fscanf(file, "%d %d %d %d", &saved.size, &saved.background, &saved.colour, &bold) == 4 &&
+                saved.size >= 50 && saved.size <= 200 && saved.background >= 0 &&
+                saved.background <= 100 && saved.colour >= 0 &&
+                saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
+            {
+                saved.bold = bold != 0;
+                style = saved;
+            }
+            std::fclose(file);
+        }
+        app.set_subtitle_style(style);
+    }
+    app.set_subtitle_style_handler([](const ui::SubtitleStyle &style) {
+        if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
+        {
+            std::fprintf(file, "%d %d %d %d\n", style.size, style.background, style.colour, style.bold ? 1 : 0);
+            std::fclose(file);
+        }
+    });
     app.set_languages_handler([&core](const std::string &audio, const std::string &subtitles) {
         core.post([audio, subtitles] { stremio_core_set_languages(audio.c_str(), subtitles.c_str()); });
     });

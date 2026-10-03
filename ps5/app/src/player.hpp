@@ -67,6 +67,8 @@ class Player
     void set_subtitle_track(int index);
     // Shows subtitles from elsewhere instead of the video's own.
     void set_external_subtitles(std::vector<Cue> cues);
+    // Shows subtitles this many seconds later than they are timed (earlier when negative).
+    void set_subtitle_delay(double seconds);
 
     // Asks for a small picture of the video at `seconds`; take_preview hands over the
     // newest one made (RGBA, top row first) and the time that was asked for.

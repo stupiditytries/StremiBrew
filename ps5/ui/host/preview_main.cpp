@@ -280,6 +280,7 @@ int main(int argc, char **argv)
             [] {},
             [](int index) { tracks.audio_selected = index; },
             [](int index) { tracks.subtitle_selected = index; },
+            [](double seconds) { tracks.subtitle_delay = seconds; },
             [](double) {},
         });
         instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {

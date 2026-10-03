@@ -55,6 +55,7 @@ class PlayControl
     std::vector<External> externals_;
     bool tracks_known_ = false, externals_known_ = false;
     int subtitle_selected_ = 0;
+    double subtitle_delay_ = 0;
     bool subtitle_chosen_ = false; // by the user or automatically; stops later automatic picks
     int preview_image_ = 0, preview_width_ = 0, preview_height_ = 0;
     double preview_time_ = 0;

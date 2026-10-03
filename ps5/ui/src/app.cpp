@@ -219,6 +219,38 @@ void App::set_languages_handler(
     languages_ = std::move(handler);
 }
 
+void App::set_subtitle_style(const SubtitleStyle &style)
+{
+    subtitle_style_ = style;
+    player_->set_subtitle_style(style);
+}
+
+void App::set_subtitle_style_handler(std::function<void(const SubtitleStyle &)> handler)
+{
+    subtitle_style_handler_ = std::move(handler);
+}
+
+// Settings: moves one of the subtitle style rows (3 size, 4 background, 5 colour,
+// 6 weight) to its next or previous choice.
+void App::change_subtitle_style(int row, int step)
+{
+    SubtitleStyle &style = subtitle_style_;
+    if (row == 3)
+        style.size = std::clamp(style.size + step * 25, 50, 200);
+    else if (row == 4)
+        style.background = std::clamp(style.background + step * 20, 0, 100);
+    else if (row == 5)
+    {
+        constexpr int kCount = static_cast<int>(std::size(kSubtitleColours));
+        style.colour = ((style.colour + step) % kCount + kCount) % kCount;
+    }
+    else
+        style.bold = !style.bold;
+    player_->set_subtitle_style(style);
+    if (subtitle_style_handler_)
+        subtitle_style_handler_(style);
+}
+
 // Settings: moves a language preference to the next or the previous choice. Subtitles
 // have "off" as their first choice.
 void App::change_language(bool subtitles, int step)
@@ -264,6 +296,8 @@ std::size_t App::focus_mark() const
     add(title_open_ ? details_->focus_mark() : 0);
     add(static_cast<std::size_t>(content_focus_));
     add(std::hash<std::string>{}(account_.audio_language + '/' + account_.subtitles_language));
+    add(static_cast<std::size_t>(subtitle_style_.size * 7 + subtitle_style_.background * 131 +
+                                 subtitle_style_.colour * 1009 + (subtitle_style_.bold ? 5003 : 0)));
     return mark;
 }
 
@@ -310,8 +344,11 @@ void App::apply(Button button)
     case Zone::Content:
         if (button == Button::Up && content_focus_ > 0)
             --content_focus_;
-        else if (button == Button::Down && content_focus_ < 2)
+        else if (button == Button::Down && content_focus_ < 6)
             ++content_focus_;
+        else if (content_focus_ > 2 && (button == Button::Left || button == Button::Right ||
+                                        button == Button::Accept))
+            change_subtitle_style(content_focus_, button == Button::Left ? -1 : 1);
         else if (content_focus_ > 0 && (button == Button::Left || button == Button::Right ||
                                         button == Button::Accept))
             change_language(content_focus_ == 2, button == Button::Left ? -1 : 1);
@@ -829,7 +866,7 @@ void App::draw_rows()
 
 void App::draw_settings()
 {
-    const float left = kNavWidth + kContentInset + kCardPadding;
+    float left = kNavWidth + kContentInset + kCardPadding;
     float top = kTopBarHeight + units(0.5f);
 
     nvgFontFace(vg_, "medium");
@@ -969,6 +1006,35 @@ void App::draw_settings()
     choice(2, "Subtitles",
            account_.subtitles_language.empty() ? std::string{"Off"}
                                                : language_name(account_.subtitles_language));
+
+    // A second column: how subtitles look, with a sample.
+    left += units(36.0f);
+    top = kTopBarHeight + units(0.5f);
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, kRowTitleSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground());
+    nvgText(vg_, left, top, "Subtitle style", nullptr);
+    top += kRowTitleSize * 1.2f + units(1.0f);
+    const SubtitleStyle &style = subtitle_style_;
+    choice(3, "Size", std::to_string(style.size) + "%");
+    choice(4, "Background", style.background == 0 ? std::string{"None"} : std::to_string(style.background) + "%");
+    choice(5, "Colour", kSubtitleColours[style.colour].name);
+    choice(6, "Weight", style.bold ? "Bold" : "Regular");
+    // The sample sits on a patch of mid grey, standing in for a picture.
+    top += units(0.6f);
+    const float sample_width = units(30.0f), sample_height = units(8.0f);
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, left, top, sample_width, sample_height, kRadius);
+    nvgFillPaint(vg_, nvgLinearGradient(vg_, left, top, left + sample_width, top + sample_height,
+                                        nvgRGBf(0.42f, 0.46f, 0.52f), nvgRGBf(0.2f, 0.22f, 0.26f)));
+    nvgFill(vg_);
+    nvgSave(vg_);
+    nvgScissor(vg_, left, top, sample_width, sample_height);
+    draw_subtitle_text(vg_, style, "Subtitles look like this,\nover whatever is playing.",
+                       left + sample_width / 2, top + sample_height - units(1.2f),
+                       sample_width - units(2.0f), 0.6f);
+    nvgRestore(vg_);
 }
 
 void App::draw_unbuilt_tab()

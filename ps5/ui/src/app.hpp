@@ -101,6 +101,10 @@ class App
     void set_player_tracks(PlayerTracks tracks);
     // Called when the preferred audio or subtitle language is changed in Settings
     // (three-letter codes; an empty subtitle language is "off").
+    // How subtitles look: set at start-up from what the host saved, and handed back to
+    // the host to save when it is changed in Settings.
+    void set_subtitle_style(const SubtitleStyle &style);
+    void set_subtitle_style_handler(std::function<void(const SubtitleStyle &)> handler);
     void set_languages_handler(
         std::function<void(const std::string &audio, const std::string &subtitles)> handler);
     bool player_open() const
@@ -142,6 +146,7 @@ class App
     void apply(Button button);
     void close_player();
     void change_language(bool subtitles, int step);
+    void change_subtitle_style(int row, int step);
     // A number that changes whenever a press moves the focus or changes the screen.
     std::size_t focus_mark() const;
     void draw_settings();
@@ -168,7 +173,10 @@ class App
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
     std::function<void(const std::string &, const std::string &)> languages_;
-    int content_focus_ = 0; // Settings: the account button, the audio row, the subtitles row
+    // Settings: the account button, the two language rows, the four subtitle style rows.
+    int content_focus_ = 0;
+    SubtitleStyle subtitle_style_;
+    std::function<void(const SubtitleStyle &)> subtitle_style_handler_;
 
     Zone zone_ = Zone::Rows;
     int navigation_focus_ = 0; // which navigation button the focus is on

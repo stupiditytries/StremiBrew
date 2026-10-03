@@ -179,6 +179,7 @@ void PlayControl::start(const ui::Stream &stream, const std::string &type, const
     externals_.clear();
     tracks_known_ = externals_known_ = false;
     subtitle_selected_ = 0;
+    subtitle_delay_ = 0;
     subtitle_chosen_ = false;
     preview_time_ = -1e9;
     reported_start_ = reported_paused_ = reported_end_ = false;
@@ -221,6 +222,11 @@ ui::PlayerHandler PlayControl::handler()
     handler.choose_subtitle = [this](int index) {
         subtitle_chosen_ = true;
         choose_subtitle(index);
+    };
+    handler.set_subtitle_delay = [this](double seconds) {
+        subtitle_delay_ = seconds;
+        player_.set_subtitle_delay(seconds);
+        rebuild_tracks();
     };
     handler.preview = [this](double seconds) { player_.request_preview(seconds); };
     return handler;
@@ -311,6 +317,7 @@ void PlayControl::rebuild_tracks()
     }
     tracks.subtitle_selected = subtitle_selected_;
     tracks.subtitles_loading = !externals_known_;
+    tracks.subtitle_delay = subtitle_delay_;
     app_.set_player_tracks(std::move(tracks));
 }
 

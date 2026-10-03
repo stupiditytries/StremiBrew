@@ -44,6 +44,28 @@ struct Playback
     double preview_time = 0;
 };
 
+// How subtitles are drawn; set in Settings.
+struct SubtitleStyle
+{
+    int size = 100;      // percent of the usual size
+    int background = 60; // how solid the black plate behind each line is, percent; 0 is none
+    int colour = 0;      // which of kSubtitleColours
+    bool bold = false;
+};
+struct SubtitleColour
+{
+    const char *name;
+    float red, green, blue;
+};
+inline constexpr SubtitleColour kSubtitleColours[] = {
+    {"White", 1.0f, 1.0f, 1.0f},  {"Yellow", 1.0f, 0.9f, 0.25f}, {"Cyan", 0.45f, 0.95f, 1.0f},
+    {"Green", 0.5f, 1.0f, 0.5f},  {"Grey", 0.78f, 0.78f, 0.78f},
+};
+// Draws subtitle text (lines separated by '\n') centred on `centre`, its last line ending
+// at `bottom`, wrapped to `width`; `scale` shrinks it for the sample in Settings.
+void draw_subtitle_text(NVGcontext *vg, const SubtitleStyle &style, const std::string &text,
+                        float centre, float bottom, float width, float scale = 1.0f);
+
 // One choice in the audio or subtitles list.
 struct TrackOption
 {
@@ -57,6 +79,7 @@ struct PlayerTracks
     int audio_selected = -1;
     int subtitle_selected = 0;
     bool subtitles_loading = false; // add-ons are still being asked
+    double subtitle_delay = 0;      // seconds the subtitles are shown later than timed
 };
 
 // What the controls ask of the host's player.
@@ -67,6 +90,7 @@ struct PlayerHandler
     std::function<void()> close;
     std::function<void(int index)> choose_audio;
     std::function<void(int index)> choose_subtitle;
+    std::function<void(double seconds)> set_subtitle_delay;
     // Make a small picture of the video at this time (see Playback::preview_image).
     std::function<void(double seconds)> preview;
 };
@@ -80,6 +104,7 @@ class PlayerScreen
     void open(const std::string &title);
     void set_playback(const Playback &playback);
     void set_tracks(PlayerTracks tracks);
+    void set_subtitle_style(const SubtitleStyle &style);
     // Returns false for a press that leaves the player (Back).
     bool press(Button button);
     void update(float seconds);
@@ -118,6 +143,7 @@ class PlayerScreen
     std::string title_;
     Playback playback_;
     PlayerTracks tracks_;
+    SubtitleStyle subtitle_style_;
     float controls_ = 1; // 0..1, how visible the controls are
     float idle_ = 0;     // seconds since the last press
     float spin_ = 0;     // the busy mark's angle
@@ -136,7 +162,7 @@ class PlayerScreen
     Menu menu_ = Menu::None;
     Menu menu_shown_ = Menu::None; // the one being drawn (it outlives menu_ while it slides out)
     float menu_slide_ = 0;         // 0..1, how far in it is
-    int menu_focus_ = 0;
+    int menu_focus_ = 0; // -1 is the subtitles list's delay row, above the list
     float menu_scroll_ = 0, menu_scroll_target_ = 0;
 };
 } // namespace ui

@@ -86,7 +86,7 @@ void PlayerScreen::set_tracks(PlayerTracks tracks)
 {
     tracks_ = std::move(tracks);
     const int count = static_cast<int>(menu_options().size());
-    menu_focus_ = std::clamp(menu_focus_, 0, std::max(0, count - 1));
+    menu_focus_ = std::clamp(menu_focus_, -1, std::max(0, count - 1));
 }
 
 const std::vector<TrackOption> &PlayerScreen::menu_options() const
@@ -153,10 +153,25 @@ bool PlayerScreen::press(Button button)
     if (menu_ != Menu::None)
     {
         const int count = static_cast<int>(menu_options().size());
-        if (button == Button::Up && menu_focus_ > 0)
+        // The subtitles list has a row above it for their delay, which left and right
+        // change a quarter of a second at a time.
+        const int first = menu_ == Menu::Subtitles ? -1 : 0;
+        if (button == Button::Up && menu_focus_ > first)
             --menu_focus_;
         else if (button == Button::Down && menu_focus_ + 1 < count)
             ++menu_focus_;
+        else if (menu_focus_ == -1)
+        {
+            if (button == Button::Left || button == Button::Right)
+            {
+                tracks_.subtitle_delay = std::clamp(
+                    tracks_.subtitle_delay + (button == Button::Right ? 0.25 : -0.25), -30.0, 30.0);
+                if (handler_.set_subtitle_delay)
+                    handler_.set_subtitle_delay(tracks_.subtitle_delay);
+            }
+            else if (button == Button::Back)
+                menu_ = Menu::None;
+        }
         else if (button == Button::Accept && menu_focus_ < count)
         {
             const auto &choose = menu_ == Menu::Audio ? handler_.choose_audio : handler_.choose_subtitle;
@@ -255,8 +270,8 @@ void PlayerScreen::update(float seconds)
     if (menu_ == Menu::None && menu_slide_ < 0.01f)
         menu_shown_ = Menu::None;
     // The focused row is kept inside the list.
-    const float window = kMenuBottom - kMenuTop;
-    const float top = static_cast<float>(menu_focus_) * kMenuRow;
+    const float window = kMenuBottom - kMenuTop - (menu_shown_ == Menu::Subtitles ? kMenuRow + units(0.6f) : 0.0f);
+    const float top = static_cast<float>(std::max(0, menu_focus_)) * kMenuRow;
     if (top < menu_scroll_target_)
         menu_scroll_target_ = top;
     else if (top + kMenuRow > menu_scroll_target_ + window)
@@ -439,49 +454,75 @@ void PlayerScreen::draw_scrub_preview(float thumb_x, float bar_top, float alpha)
     nvgText(vg_, label_left + label_width / 2, label_middle, label.c_str(), nullptr);
 }
 
-// The subtitle, centred near the bottom and lifted clear of the controls when they are up.
-void PlayerScreen::draw_subtitle()
+void draw_subtitle_text(NVGcontext *vg, const SubtitleStyle &style, const std::string &text,
+                        float centre, float bottom, float width, float scale)
 {
-    if (playback_.subtitle.empty())
-        return;
-    const float size = units(2.0f), line_height = size * 1.55f;
-    const float width = kScreenWidth * 0.72f;
-    nvgFontFace(vg_, "medium");
-    nvgFontSize(vg_, size);
+    const float size = units(2.0f) * static_cast<float>(style.size) / 100.0f * scale;
+    const float line_height = size * 1.55f;
+    nvgFontFace(vg, style.bold ? "bold" : "medium");
+    nvgFontSize(vg, size);
     // Each of the subtitle's own lines is wrapped to the width; all are drawn bottom up.
     constexpr int kMost = 8;
     NVGtextRow rows[kMost];
     int count = 0;
-    const char *start = playback_.subtitle.c_str();
-    const char *const end = start + playback_.subtitle.size();
+    const char *start = text.c_str();
+    const char *const end = start + text.size();
     while (start < end && count < kMost)
     {
         const char *stop = start;
         while (stop < end && *stop != '\n')
             ++stop;
         if (stop > start)
-            count += nvgTextBreakLines(vg_, start, stop, width, rows + count, kMost - count);
+            count += nvgTextBreakLines(vg, start, stop, width, rows + count, kMost - count);
         start = stop + 1;
     }
-    const float bottom = kScreenHeight - units(3.6f) - controls_ * units(8.0f);
-    nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
-    // Each line sits on its own plate of translucent black, as wide as its text.
+    const auto middle = [&](int row) {
+        return bottom - (static_cast<float>(count - 1 - row) + 0.5f) * line_height;
+    };
+    const SubtitleColour &colour =
+        kSubtitleColours[std::clamp(style.colour, 0, static_cast<int>(std::size(kSubtitleColours)) - 1)];
+    if (style.background > 0)
+    {
+        // A plate of translucent black behind each line, as wide as its text. The plates
+        // are one shape, so where two lines' plates meet the black is not laid on twice.
+        nvgBeginPath(vg);
+        for (int row = 0; row < count; ++row)
+        {
+            const float plate = rows[row].width + size * 0.8f;
+            nvgRect(vg, centre - plate / 2, middle(row) - line_height / 2, plate, line_height);
+        }
+        nvgFillColor(vg, nvgRGBAf(0, 0, 0, static_cast<float>(style.background) / 100.0f));
+        nvgFill(vg);
+    }
+    nvgTextAlign(vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
     for (int row = 0; row < count; ++row)
     {
-        const float y = bottom - (static_cast<float>(count - 1 - row) + 0.5f) * line_height;
-        const float width = rows[row].width + units(1.6f);
-        nvgBeginPath(vg_);
-        nvgRoundedRect(vg_, kScreenWidth / 2 - width / 2, y - line_height / 2, width,
-                       line_height + 0.5f, units(0.3f));
-        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 0.62f));
-        nvgFill(vg_);
+        if (style.background < 50)
+        {
+            // With little or no plate, a soft dark edge keeps the letters readable.
+            nvgFontBlur(vg, size * 0.1f);
+            nvgFillColor(vg, nvgRGBAf(0, 0, 0, 1));
+            for (int pass = 0; pass < 3; ++pass)
+                nvgText(vg, centre, middle(row) + size * 0.04f, rows[row].start, rows[row].end);
+            nvgFontBlur(vg, 0);
+        }
+        nvgFillColor(vg, nvgRGBAf(colour.red, colour.green, colour.blue, 1));
+        nvgText(vg, centre, middle(row), rows[row].start, rows[row].end);
     }
-    for (int row = 0; row < count; ++row)
-    {
-        const float y = bottom - (static_cast<float>(count - 1 - row) + 0.5f) * line_height;
-        nvgFillColor(vg_, foreground_solid(1.0f));
-        nvgText(vg_, kScreenWidth / 2, y, rows[row].start, rows[row].end);
-    }
+}
+
+// The subtitle, centred near the bottom and lifted clear of the controls when they are up.
+void PlayerScreen::draw_subtitle()
+{
+    if (playback_.subtitle.empty())
+        return;
+    draw_subtitle_text(vg_, subtitle_style_, playback_.subtitle, kScreenWidth / 2,
+                       kScreenHeight - units(3.6f) - controls_ * units(8.0f), kScreenWidth * 0.72f);
+}
+
+void PlayerScreen::set_subtitle_style(const SubtitleStyle &style)
+{
+    subtitle_style_ = style;
 }
 
 void PlayerScreen::draw_menu()
@@ -509,14 +550,42 @@ void PlayerScreen::draw_menu()
         nvgText(vg_, left + kMenuWidth - inset, units(4.7f), "Asking add-ons", nullptr);
     }
 
+    // Subtitles: their delay, in a row of its own above the list.
+    float list_top = kMenuTop;
+    if (!audio)
+    {
+        const bool focused = menu_ != Menu::None && menu_focus_ == -1;
+        const float row_left = left + units(1.2f), row_width = kMenuWidth - units(2.4f);
+        const float row_height = kMenuRow - units(0.4f), middle = kMenuTop + row_height / 2;
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, row_left, kMenuTop, row_width, row_height, kRadius * 0.8f);
+        nvgFillColor(vg_, nvgRGBAf(1, 1, 1, focused ? 0.14f : 0.06f));
+        nvgFill(vg_);
+        if (focused)
+            focus_ring(vg_, row_left, kMenuTop, row_width, row_height, kRadius * 0.8f);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+        nvgFontFace(vg_, "medium");
+        nvgFontSize(vg_, units(1.15f));
+        nvgFillColor(vg_, foreground(0.85f));
+        nvgText(vg_, row_left + units(1.2f), middle, "Delay", nullptr);
+        char amount[24];
+        std::snprintf(amount, sizeof amount, "%+.2f s", tracks_.subtitle_delay);
+        const std::string shown = focused ? std::string{"\xE2\x80\xB9   "} + amount + "   \xE2\x80\xBA" : amount;
+        nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+        nvgFontFace(vg_, "semibold");
+        nvgFillColor(vg_, foreground(1.0f));
+        nvgText(vg_, row_left + row_width - units(1.2f), middle, shown.c_str(), nullptr);
+        list_top += kMenuRow + units(0.6f);
+    }
+
     const std::vector<TrackOption> &options = menu_options();
     const int selected = menu_selected();
     nvgSave(vg_);
-    nvgScissor(vg_, left, kMenuTop - units(0.3f), kMenuWidth, kMenuBottom - kMenuTop + units(0.6f));
+    nvgScissor(vg_, left, list_top - units(0.3f), kMenuWidth, kMenuBottom - list_top + units(0.6f));
     for (std::size_t index = 0; index < options.size(); ++index)
     {
-        const float top = kMenuTop + static_cast<float>(index) * kMenuRow - menu_scroll_;
-        if (top + kMenuRow < kMenuTop - units(1.0f) || top > kMenuBottom + units(1.0f))
+        const float top = list_top + static_cast<float>(index) * kMenuRow - menu_scroll_;
+        if (top + kMenuRow < list_top - units(1.0f) || top > kMenuBottom + units(1.0f))
             continue;
         const bool focused = menu_ != Menu::None && static_cast<int>(index) == menu_focus_;
         const bool chosen = static_cast<int>(index) == selected;

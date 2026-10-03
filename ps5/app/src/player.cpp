@@ -531,6 +531,7 @@ struct Player::Session
     // While the reader swaps the audio decoder the audio thread stands aside.
     bool audio_swapping = false, audio_parked = false;
     std::vector<Cue> cues; // the subtitles on hand, in order of their start
+    double subtitle_delay = 0;
     // The scrubbing picture: the time asked for, and the newest one made.
     bool preview_wanted = false;
     double preview_time = 0;
@@ -1340,11 +1341,12 @@ ui::Playback Player::status() const
             !session.paused && (session.seek_wanted || !session.video_primed || session.starved);
     }
     // The subtitle lines on screen at this moment.
+    const double reading = playback.position - session.subtitle_delay;
     for (const Cue &cue : session.cues)
     {
-        if (cue.start > playback.position)
+        if (cue.start > reading)
             break;
-        if (playback.position < cue.end)
+        if (reading < cue.end)
             playback.subtitle += (playback.subtitle.empty() ? "" : "\n") + cue.text;
     }
     return playback;
@@ -1416,6 +1418,14 @@ void Player::set_external_subtitles(std::vector<Cue> cues)
     session_->subtitle_wanted = -1;
     session_->cues = std::move(cues);
     session_->wake.notify_all();
+}
+
+void Player::set_subtitle_delay(double seconds)
+{
+    if (session_ == nullptr)
+        return;
+    std::lock_guard lock{session_->mutex};
+    session_->subtitle_delay = seconds;
 }
 
 void Player::request_preview(double seconds)
