@@ -42,6 +42,7 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
     font("bold", "PlusJakartaSans-Bold.ttf");
 
     details_ = std::make_unique<DetailsScreen>(vg_, *images_);
+    details_->set_origin(kNavWidth + kContentInset + kCardPadding, kHeroTextTop);
     details_->set_callbacks({
         [this](const std::string &video) {
             if (title_handler_.select_video)
@@ -805,9 +806,9 @@ void App::draw(int width, int height)
     nvgFillColor(vg_, background());
     nvgFill(vg_);
 
-    if (title_open_)
+    if (title_open_ && details_->opacity() >= 0.999f)
     {
-        // A title's page takes the whole screen.
+        // A title's page takes the whole screen once it has opened.
         details_->draw();
         nvgEndFrame(vg_);
         return;
@@ -827,6 +828,9 @@ void App::draw(int width, int height)
     }
     draw_top_bar();
     draw_navigation();
+    // While a title's page opens or closes it is drawn over the board.
+    if (title_open_)
+        details_->draw();
 
     nvgEndFrame(vg_);
 }

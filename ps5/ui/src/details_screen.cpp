@@ -29,6 +29,20 @@ constexpr float kTilesTop = kScreenHeight - kTileHeight - kTileLabel - units(1.6
 constexpr float kSeasonHeight = units(2.6f);
 constexpr float kSeasonsTop = kTilesTop - kSeasonHeight - units(1.3f);
 constexpr float kSeasonGap = units(0.6f);
+// The focused episode's name and summary sit just above the season buttons.
+constexpr float kEpisodeAboutTop = kSeasonsTop - units(12.8f);
+
+// Seconds the page takes to open or close, and the episode text to change.
+constexpr float kOpenTime = 0.34f;
+constexpr float kTextOut = 0.09f;
+constexpr float kTextIn = 0.20f;
+
+// Starts fast and settles: for things arriving at their place.
+float settle(float progress)
+{
+    const float rest = 1.0f - std::clamp(progress, 0.0f, 1.0f);
+    return 1.0f - rest * rest * rest;
+}
 
 // Streams: a list down the right-hand side.
 constexpr float kListLeft = units(46.0f);
@@ -63,6 +77,16 @@ std::string season_name(int season)
 }
 } // namespace
 
+namespace
+{
+Backdrop backdrop = Backdrop::Light;
+}
+
+void set_backdrop(Backdrop style)
+{
+    backdrop = style;
+}
+
 DetailsScreen::DetailsScreen(NVGcontext *context, Images &images) : vg_{context}, images_{images}
 {
 }
@@ -70,6 +94,17 @@ DetailsScreen::DetailsScreen(NVGcontext *context, Images &images) : vg_{context}
 void DetailsScreen::set_callbacks(Callbacks callbacks)
 {
     callbacks_ = std::move(callbacks);
+}
+
+void DetailsScreen::set_origin(float x, float y)
+{
+    origin_x_ = x;
+    origin_y_ = y;
+}
+
+float DetailsScreen::opacity() const
+{
+    return settle(appear_);
 }
 
 void DetailsScreen::open(const std::string &type, const std::string &id, const std::string &name)
@@ -87,7 +122,12 @@ void DetailsScreen::open(const std::string &type, const std::string &id, const s
     seasons_scroll_ = seasons_scroll_target_ = 0;
     streams_scroll_ = streams_scroll_target_ = 0;
     appear_ = 0;
+    closing_ = false;
     streams_ = type == "series" ? 0.0f : 1.0f;
+    about_valid_ = false;
+    about_alpha_ = 0;
+    tiles_alpha_ = 1;
+    tiles_shift_ = 0;
 }
 
 void DetailsScreen::set_details(Details details)
@@ -191,6 +231,10 @@ void DetailsScreen::follow_focus()
 
 void DetailsScreen::press(Button button)
 {
+    if (closing_)
+        return;
+    const auto leave = [this] { closing_ = true; };
+    const int season_before = season_;
     switch (zone_)
     {
     case Zone::Seasons:
@@ -204,12 +248,15 @@ void DetailsScreen::press(Button button)
             season_ = all[static_cast<std::size_t>(index + 1)];
         else if (button == Button::Down || button == Button::Accept)
             zone_ = Zone::Episodes;
-        else if (button == Button::Back && callbacks_.close)
-            callbacks_.close();
-        if (button == Button::Left || button == Button::Right)
+        else if (button == Button::Back)
+            leave();
+        if (season_ != season_before)
         {
             episode_focus_ = 0;
             episodes_scroll_ = episodes_scroll_target_ = 0;
+            // The new season's episodes come in from the side the season was on.
+            tiles_alpha_ = 0;
+            tiles_shift_ = button == Button::Right ? units(5.0f) : -units(5.0f);
         }
         break;
     }
@@ -233,8 +280,8 @@ void DetailsScreen::press(Button button)
             if (callbacks_.select_video)
                 callbacks_.select_video(chosen_id_);
         }
-        else if (button == Button::Back && callbacks_.close)
-            callbacks_.close();
+        else if (button == Button::Back)
+            leave();
         break;
     }
     case Zone::Streams:
@@ -249,8 +296,8 @@ void DetailsScreen::press(Button button)
         {
             if (is_series())
                 zone_ = Zone::Episodes; // back to the episode the streams were for
-            else if (callbacks_.close)
-                callbacks_.close();
+            else
+                leave();
         }
         break;
     }
@@ -262,31 +309,70 @@ void DetailsScreen::update(float seconds)
     episodes_scroll_ = eased(episodes_scroll_, episodes_scroll_target_, seconds);
     seasons_scroll_ = eased(seasons_scroll_, seasons_scroll_target_, seconds);
     streams_scroll_ = eased(streams_scroll_, streams_scroll_target_, seconds);
-    appear_ = std::min(1.0f, appear_ + seconds / 0.25f);
     streams_ = eased(streams_, zone_ == Zone::Streams ? 1.0f : 0.0f, seconds);
+    tiles_alpha_ = std::min(1.0f, tiles_alpha_ + seconds / 0.22f);
+    tiles_shift_ = eased(tiles_shift_, 0.0f, seconds);
+
+    if (closing_)
+    {
+        appear_ = std::max(0.0f, appear_ - seconds / kOpenTime);
+        if (appear_ <= 0 && callbacks_.close)
+        {
+            closing_ = false;
+            callbacks_.close();
+        }
+    }
+    else
+    {
+        appear_ = std::min(1.0f, appear_ + seconds / kOpenTime);
+    }
+
+    // The episode text trails the focus: out, switch, in.
+    const Episode *target = shown_episode();
+    const bool stale = about_valid_ ? target == nullptr || target->id != about_.id : target != nullptr;
+    if (stale)
+    {
+        about_alpha_ = std::max(0.0f, about_alpha_ - seconds / kTextOut);
+        if (about_alpha_ <= 0)
+        {
+            about_valid_ = target != nullptr;
+            if (target != nullptr)
+                about_ = *target;
+        }
+    }
+    else if (about_valid_)
+    {
+        // Kept current, so a summary that arrives late (details still loading) shows.
+        about_ = *target;
+        about_alpha_ = std::min(1.0f, about_alpha_ + seconds / kTextIn);
+    }
 }
 
 // The title's logo (or name) and its key facts. `top` is left at the line under them.
 void DetailsScreen::draw_header(float &top)
 {
-    const float fade = appear_;
-    top = kLogoTop;
+    const float moved = settle(appear_);
+    const float fade = moved;
+    // The logo starts exactly where the board showed it and travels to its place here, at
+    // full strength the whole way, so it reads as the same logo moving.
+    const float left = origin_x_ + (kLeft - origin_x_) * moved;
+    top = origin_y_ + (kLogoTop - origin_y_) * moved;
     const Images::Texture logo = images_.get(details_.logo, kLogoPixels);
-    if (!draw_logo(vg_, kLeft, top, kHeroLogoWidth, kHeroLogoHeight, logo, fade) &&
+    if (!draw_logo(vg_, left, top, kHeroLogoWidth, kHeroLogoHeight, logo, 1.0f) &&
         logo.state == Images::State::Unavailable)
     {
         nvgFontFace(vg_, "bold");
         nvgFontSize(vg_, kHeroTitleSize);
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_BOTTOM);
-        nvgFillColor(vg_, foreground(fade));
-        fitted_text(vg_, kLeft, top + kHeroLogoHeight, kAboutWidth,
+        nvgFillColor(vg_, foreground(1.0f));
+        fitted_text(vg_, left, top + kHeroLogoHeight, kAboutWidth,
                     details_.name.empty() ? opened_name_ : details_.name);
     }
     top += kHeroLogoHeight + units(1.3f);
 
     nvgFontSize(vg_, kHeroMetaSize);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-    float x = kLeft;
+    float x = left;
     const float middle = top + kHeroMetaSize / 2;
     if (!details_.imdb_rating.empty())
     {
@@ -307,7 +393,7 @@ void DetailsScreen::draw_header(float &top)
     const auto fact = [&](const std::string &text) {
         if (text.empty())
             return;
-        if (x > kLeft)
+        if (x > left)
         {
             nvgFontFace(vg_, "regular");
             nvgFillColor(vg_, foreground(0.35f * fade));
@@ -326,7 +412,7 @@ void DetailsScreen::draw_header(float &top)
 // A film's description and cast.
 void DetailsScreen::draw_film_about(float top)
 {
-    const float fade = appear_;
+    const float fade = settle(appear_);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     if (details_.state == Details::State::Error)
     {
@@ -356,9 +442,12 @@ void DetailsScreen::draw_film_about(float top)
 }
 
 // An episode's name, date and summary, where a film's description would be.
-void DetailsScreen::draw_episode_about(float top, const Episode &episode)
+void DetailsScreen::draw_episode_about(float, const Episode &episode)
 {
-    const float fade = appear_;
+    const float fade = settle(appear_) * about_alpha_;
+    // Sits above the season buttons, and rises a little into place as it fades in.
+    float top = kEpisodeAboutTop + (1.0f - about_alpha_) * units(0.6f) +
+                (1.0f - settle(appear_)) * units(3.0f);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(0.95f));
@@ -370,7 +459,7 @@ void DetailsScreen::draw_episode_about(float top, const Episode &episode)
     if (!episode.released.empty())
         place += "  \xC2\xB7  " + episode.released;
     nvgText(vg_, kLeft, top, place.c_str(), nullptr);
-    top += units(1.7f);
+    top += units(2.3f);
 
     nvgFontFace(vg_, "semibold");
     nvgFontSize(vg_, units(1.9f));
@@ -381,7 +470,7 @@ void DetailsScreen::draw_episode_about(float top, const Episode &episode)
     nvgFontFace(vg_, "regular");
     nvgFontSize(vg_, units(1.1f));
     nvgFillColor(vg_, foreground(0.75f * fade));
-    wrapped_text(vg_, kLeft, top, kAboutWidth, units(1.1f) * 1.5f, 5,
+    wrapped_text(vg_, kLeft, top, kAboutWidth, units(1.1f) * 1.5f, 4,
                  episode.overview.empty() ? details_.description : drawable(episode.overview));
 }
 
@@ -393,6 +482,8 @@ void DetailsScreen::draw_seasons()
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(1.05f));
     nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    const float shown = settle(appear_);
+    const float rise = (1.0f - shown) * units(4.0f);
     float x = kLeft - seasons_scroll_;
     for (const int season : all)
     {
@@ -410,14 +501,15 @@ void DetailsScreen::draw_seasons()
             else if (left + width > seasons_scroll_target_ + window)
                 seasons_scroll_target_ = left + width - window;
         }
+        const float y = kSeasonsTop + rise;
         nvgBeginPath(vg_);
-        nvgRoundedRect(vg_, x, kSeasonsTop, width, kSeasonHeight, kSeasonHeight / 2);
-        nvgFillColor(vg_, selected ? accent(appear_) : overlay(2.0f * appear_));
+        nvgRoundedRect(vg_, x, y, width, kSeasonHeight, kRadius);
+        nvgFillColor(vg_, selected ? accent(shown) : overlay(2.4f * shown));
         nvgFill(vg_);
         if (focused)
-            focus_ring(vg_, x, kSeasonsTop, width, kSeasonHeight, kSeasonHeight / 2);
-        nvgFillColor(vg_, foreground((selected ? 1.0f : 0.75f) * appear_));
-        nvgText(vg_, x + width / 2, kSeasonsTop + kSeasonHeight / 2, name.c_str(), nullptr);
+            focus_ring(vg_, x, y, width, kSeasonHeight, kRadius);
+        nvgFillColor(vg_, foreground((selected ? 1.0f : 0.75f) * shown));
+        nvgText(vg_, x + width / 2, y + kSeasonHeight / 2, name.c_str(), nullptr);
         x += width + kSeasonGap;
     }
 }
@@ -430,7 +522,7 @@ void DetailsScreen::draw_episodes()
         nvgFontFace(vg_, "regular");
         nvgFontSize(vg_, units(1.1f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-        nvgFillColor(vg_, foreground(0.6f * appear_));
+        nvgFillColor(vg_, foreground(0.6f * settle(appear_)));
         nvgText(vg_, kLeft, kTilesTop,
                 details_.state == Details::State::Ready ? "No episodes listed." : "Loading episodes",
                 nullptr);
@@ -443,13 +535,15 @@ void DetailsScreen::draw_episodes()
     const std::size_t focused = zone_ == Zone::Episodes ? episode_focus_ : episodes.size();
     // While the streams are open the row stays, dimmed, with the chosen episode marked.
     const float dim = 1.0f - 0.65f * streams_;
+    const float shown = settle(appear_) * tiles_alpha_;
+    const float rise = (1.0f - settle(appear_)) * units(4.0f);
 
     const auto draw_tile = [&](std::size_t index) {
         const Episode &episode = *episodes[index];
         const bool is_focused = index == focused;
         const bool is_chosen = zone_ == Zone::Streams && episode.id == chosen_id_;
-        float x = kLeft + static_cast<float>(index) * pitch - episodes_scroll_;
-        float y = kTilesTop;
+        float x = kLeft + static_cast<float>(index) * pitch - episodes_scroll_ + tiles_shift_;
+        float y = kTilesTop + rise;
         float w = kTileWidth, h = kTileHeight;
         if (is_focused)
         {
@@ -458,7 +552,7 @@ void DetailsScreen::draw_episodes()
             w *= kFocusScale;
             h *= kFocusScale;
         }
-        const float alpha = appear_ * (is_chosen ? 1.0f : dim);
+        const float alpha = shown * (is_chosen ? 1.0f : dim);
         const Images::Texture still = images_.get(episode.thumbnail, kStillPixels);
         if (still.state == Images::State::Ready)
         {
@@ -490,8 +584,9 @@ void DetailsScreen::draw_episodes()
         nvgFontSize(vg_, units(1.0f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
         nvgFillColor(vg_, foreground((is_focused || is_chosen ? 1.0f : 0.8f) * alpha));
-        fitted_text(vg_, kLeft + static_cast<float>(index) * pitch - episodes_scroll_ + units(0.2f),
-                    kTilesTop + kTileHeight + kTileLabel / 2 + units(0.3f),
+        fitted_text(vg_,
+                    kLeft + static_cast<float>(index) * pitch - episodes_scroll_ + tiles_shift_ + units(0.2f),
+                    kTilesTop + rise + kTileHeight + kTileLabel / 2 + units(0.3f),
                     kTileWidth - units(0.4f), drawable(episode.title));
     };
     for (std::size_t index = first; index < last; ++index)
@@ -552,7 +647,8 @@ void DetailsScreen::draw_streams()
     // The list slides in from the right.
     const float shift = (1.0f - streams_) * units(6.0f);
     const float x = kListLeft + shift;
-    nvgGlobalAlpha(vg_, streams_ * appear_);
+    const float shown = streams_ * settle(appear_);
+    nvgGlobalAlpha(vg_, shown);
 
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFontFace(vg_, "medium");
@@ -569,10 +665,18 @@ void DetailsScreen::draw_streams()
     for (std::size_t index = 0; index < details_.streams.size(); ++index)
     {
         if (y + kStreamHeight > kListTop - units(1.0f) && y < bottom + units(1.0f))
+        {
+            // A card thins out as it nears the bottom of the list (and the top, when the
+            // list is scrolled), so the list fades away rather than being cut off.
+            const float below = std::clamp((bottom - y - kStreamHeight * 0.35f) / (kStreamHeight * 0.9f), 0.0f, 1.0f);
+            const float above = std::clamp((y + kStreamHeight * 0.65f - kListTop) / (kStreamHeight * 0.6f), 0.0f, 1.0f);
+            nvgGlobalAlpha(vg_, shown * below * above);
             draw_stream(details_.streams[index], x, y, kListWidth,
                         zone_ == Zone::Streams && index == stream_focus_);
+        }
         y += kStreamHeight + kStreamGap;
     }
+    nvgGlobalAlpha(vg_, shown);
     // Under the streams so far (or instead of them): whether more are on their way.
     nvgFontFace(vg_, "regular");
     nvgFontSize(vg_, units(1.05f));
@@ -591,42 +695,49 @@ void DetailsScreen::draw_streams()
 
 void DetailsScreen::draw()
 {
+    const float shown = settle(appear_);
     nvgBeginPath(vg_);
     nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
-    nvgFillColor(vg_, background());
+    nvgFillColor(vg_, nvgRGBAf(0, 0, 0, shown));
     nvgFill(vg_);
 
-    // The title's artwork over the whole screen, darkened where things are drawn on it:
-    // down the left behind the text, and along the bottom behind a series' episodes.
-    const Images::Texture art = images_.get(details_.background, kArtPixels);
+    // The title's artwork, softened, fills the screen under a grey wash, so it sets the
+    // page's mood without fighting the text. It is darkened further down the left behind
+    // the text, and along the bottom behind a series' episodes.
+    const Images::Texture art = backdrop == Backdrop::Sharp
+                                    ? images_.get(details_.background, kArtPixels)
+                                    : images_.get_soft(details_.background, backdrop == Backdrop::Light);
+    if (art.state == Images::State::Ready)
+        cover_image(vg_, 0, 0, kScreenWidth, kScreenHeight, 0, art, shown);
+    const auto shade = [&](float x0, float y0, float x1, float y1, NVGcolor from, NVGcolor to) {
+        nvgBeginPath(vg_);
+        nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+        nvgFillPaint(vg_, nvgLinearGradient(vg_, x0, y0, x1, y1, from, to));
+        nvgFill(vg_);
+    };
     if (art.state == Images::State::Ready)
     {
-        cover_image(vg_, 0, 0, kScreenWidth, kScreenHeight, 0, art, appear_);
-        const auto shade = [&](float x0, float y0, float x1, float y1, float from, float to) {
-            nvgBeginPath(vg_);
-            nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
-            nvgFillPaint(vg_, nvgLinearGradient(vg_, x0, y0, x1, y1, nvgRGBAf(0, 0, 0, from),
-                                                nvgRGBAf(0, 0, 0, to)));
-            nvgFill(vg_);
-        };
-        shade(0, 0, kScreenWidth * 0.7f, 0, 0.9f, 0.25f);
+        const float wash = backdrop == Backdrop::Sharp ? 0.62f : 0.5f;
+        const NVGcolor grey = nvgRGBAf(0.07f, 0.07f, 0.085f, wash * shown);
+        shade(0, 0, kScreenWidth, 0, grey, grey);
+        shade(0, 0, kScreenWidth * 0.75f, 0, nvgRGBAf(0, 0, 0, 0.72f * shown), nvgRGBAf(0, 0, 0, 0));
         if (is_series())
-            shade(0, kSeasonsTop - units(8.0f), 0, kSeasonsTop + units(2.0f), 0.0f, 0.88f);
-        // Behind the stream list, as it slides in.
-        if (streams_ > 0.01f)
-            shade(kListLeft - units(8.0f), 0, kListLeft, 0, 0.0f, 0.6f * streams_);
+            shade(0, kEpisodeAboutTop - units(2.0f), 0, kSeasonsTop + units(1.0f),
+                  nvgRGBAf(0, 0, 0, 0), nvgRGBAf(0, 0, 0, 0.78f * shown));
     }
 
     float top = 0;
     draw_header(top);
-    if (const Episode *episode = shown_episode())
-        draw_episode_about(top, *episode);
-    else
-        draw_film_about(top);
     if (is_series())
     {
+        if (about_valid_)
+            draw_episode_about(top, about_);
         draw_seasons();
         draw_episodes();
+    }
+    else
+    {
+        draw_film_about(top);
     }
     draw_streams();
 }

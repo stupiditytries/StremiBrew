@@ -31,6 +31,7 @@
 
 #include "app.hpp"
 #include "board_data.hpp"
+#include "details_screen.hpp"
 #include "theme.hpp"
 
 namespace
@@ -186,6 +187,14 @@ int main(int argc, char **argv)
             shot = argv[index + 1];
         else if (option == "--keys")
             keys = argv[index + 1];
+        else if (option == "--backdrop")
+        {
+            // soft, light or sharp: how a title page treats its artwork.
+            const std::string style = argv[index + 1];
+            ui::set_backdrop(style == "soft"    ? ui::Backdrop::Soft
+                             : style == "sharp" ? ui::Backdrop::Sharp
+                                                : ui::Backdrop::Light);
+        }
     }
 
     std::ifstream file{argv[1], std::ios::binary};

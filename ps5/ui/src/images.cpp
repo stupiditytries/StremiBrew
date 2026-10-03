@@ -61,6 +61,48 @@ bool is_webp(const std::vector<unsigned char> &bytes)
            std::memcmp(bytes.data() + 8, "WEBP", 4) == 0;
 }
 
+// A softened copy is this wide at most; stretched over the screen it is already smooth,
+// and the blur below removes what detail is left.
+constexpr int kSoftWidth = 480;
+constexpr int kLightSoftWidth = 960;
+
+// Blurs an RGBA image in place: a box blur run three times each way, which is close to a
+// Gaussian.
+void soften(std::vector<unsigned char> &pixels, int width, int height, int kRadius)
+{
+    std::vector<unsigned char> other(pixels.size());
+    const auto pass = [&](const unsigned char *from, unsigned char *to, bool horizontal) {
+        const int outer = horizontal ? height : width;
+        const int inner = horizontal ? width : height;
+        const int step = horizontal ? 4 : width * 4;
+        for (int line = 0; line < outer; ++line)
+        {
+            const std::size_t start = horizontal ? static_cast<std::size_t>(line) * width * 4
+                                                  : static_cast<std::size_t>(line) * 4;
+            for (int channel = 0; channel < 4; ++channel)
+            {
+                int sum = 0;
+                for (int offset = -kRadius; offset <= kRadius; ++offset)
+                    sum += from[start + static_cast<std::size_t>(std::clamp(offset, 0, inner - 1)) * step + channel];
+                for (int index = 0; index < inner; ++index)
+                {
+                    to[start + static_cast<std::size_t>(index) * step + channel] =
+                        static_cast<unsigned char>(sum / (2 * kRadius + 1));
+                    const int leaving = std::clamp(index - kRadius, 0, inner - 1);
+                    const int entering = std::clamp(index + kRadius + 1, 0, inner - 1);
+                    sum += from[start + static_cast<std::size_t>(entering) * step + channel] -
+                           from[start + static_cast<std::size_t>(leaving) * step + channel];
+                }
+            }
+        }
+    };
+    for (int round = 0; round < 3; ++round)
+    {
+        pass(pixels.data(), other.data(), true);
+        pass(other.data(), pixels.data(), false);
+    }
+}
+
 // An image's alpha below this counts as nothing being there.
 constexpr unsigned char kVisibleAlpha = 24;
 } // namespace
@@ -91,7 +133,7 @@ Images::~Images()
 Images::Decoded Images::decode(const Job &job)
 {
     Decoded result;
-    result.address = job.address;
+    result.address = job.key;
     const std::vector<unsigned char> bytes = read_file(job.file);
     if (bytes.empty())
         return result;
@@ -137,7 +179,8 @@ Images::Decoded Images::decode(const Job &job)
         // least twice as wide as it is ever drawn. Textures have no smaller copies of
         // themselves to fall back on, so this is also what keeps a big image from
         // shimmering when drawn small.
-        const int factor = job.max_width > 0 ? std::max(1, width / job.max_width) : 1;
+        const int limit = job.soft ? (job.light ? kLightSoftWidth : kSoftWidth) : job.max_width;
+        const int factor = limit > 0 ? std::max(1, width / limit) : 1;
         const int out_width = width / factor, out_height = height / factor;
         result.width = out_width;
         result.height = out_height;
@@ -180,6 +223,8 @@ Images::Decoded Images::decode(const Job &job)
         WebPFree(pixels);
     else
         stbi_image_free(pixels);
+    if (job.soft && !result.pixels.empty())
+        soften(result.pixels, result.width, result.height, job.light ? 2 : 3);
     return result;
 }
 
@@ -301,16 +346,31 @@ void Images::prefetch(const std::string &address)
 
 Images::Texture Images::get(const std::string &address, int max_width)
 {
+    return find(address, address, max_width, false, false);
+}
+
+Images::Texture Images::get_soft(const std::string &address, bool light)
+{
     if (address.empty())
         return {};
-    if (const auto found = entries_.find(address); found != entries_.end())
+    // The control character keeps the key from ever matching a real address.
+    return find(address, address + (light ? "\x01light" : "\x01soft"), 0, true, light);
+}
+
+// `address` names the file; `key` is what the texture is filed under.
+Images::Texture Images::find(const std::string &address, const std::string &key, int max_width,
+                             bool soft, bool light)
+{
+    if (address.empty())
+        return {};
+    if (const auto found = entries_.find(key); found != entries_.end())
     {
         found->second.last_used = frame_;
         return found->second.texture;
     }
     Texture pending;
     pending.state = State::Pending;
-    if (decoding_.count(address) != 0)
+    if (decoding_.count(key) != 0)
         return pending;
 
     // An image that is still downloading is looked for every so often, not every frame.
@@ -322,7 +382,7 @@ Images::Texture Images::get(const std::string &address, int max_width)
     {
         if (!request(address, file))
         {
-            entries_[address] = Entry{}; // remembered as unavailable
+            entries_[key] = Entry{}; // remembered as unavailable
             return {};
         }
         downloads_[address].look_again = frame_ + kLookEveryFrames;
@@ -331,10 +391,10 @@ Images::Texture Images::get(const std::string &address, int max_width)
     downloads_.erase(address);
 
     // The file is there: a worker reads and decodes it.
-    decoding_.insert(address);
+    decoding_.insert(key);
     {
         const std::lock_guard<std::mutex> lock{mutex_};
-        jobs_.push_back(Job{address, file, max_width});
+        jobs_.push_back(Job{address, file, max_width, key, soft, light});
     }
     wake_.notify_one();
     return pending;

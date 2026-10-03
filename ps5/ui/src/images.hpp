@@ -58,6 +58,10 @@ class Images
     // big source images (some add-ons send 800 px squares for a 200 px tile) from
     // costing upload time and memory. The first request's value is the one used.
     Texture get(const std::string &address, int max_width);
+    // A softened copy of the image: shrunk small and blurred, to be drawn stretched as a
+    // backdrop that text stays readable on. Kept separately from the sharp one.
+    // `light` asks for a gentler blur that keeps more of the picture.
+    Texture get_soft(const std::string &address, bool light = false);
     // Starts downloading `address` if it is not in the folder, without making a texture:
     // for images that are likely to be wanted soon.
     void prefetch(const std::string &address);
@@ -93,6 +97,9 @@ class Images
         std::string address;
         std::string file;
         int max_width = 0;
+        std::string key; // what the result is filed under (differs for a softened copy)
+        bool soft = false;
+        bool light = false;
     };
     struct Decoded
     {
@@ -103,6 +110,8 @@ class Images
     };
 
     bool request(const std::string &address, const std::string &file);
+    Texture find(const std::string &address, const std::string &key, int max_width, bool soft,
+                 bool light);
     void trim();
     void work();
     static Decoded decode(const Job &job);
