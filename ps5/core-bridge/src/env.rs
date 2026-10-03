@@ -52,6 +52,28 @@ fn blocking<T: Send + 'static>(
     receiver.map(|result| result.map_err(|_| EnvError::Other("worker stopped".to_owned())))
 }
 
+/// Downloads `url` into the file `path` on the network pool. The bytes are written
+/// beside the target and renamed into place, so a reader never sees half a file. A failed
+/// download leaves no file. Used for poster images.
+pub(crate) fn fetch_to_file(url: String, path: PathBuf) {
+    /// Posters are tens of kilobytes; anything far larger is not an image worth keeping.
+    const LIMIT: u64 = 16 << 20;
+    IO_POOL.spawn_ok(async move {
+        let Ok(response) = HTTP.get(&url).call() else {
+            return;
+        };
+        let mut bytes = Vec::new();
+        let mut limited = std::io::Read::take(response.into_reader(), LIMIT);
+        if std::io::Read::read_to_end(&mut limited, &mut bytes).is_err() || bytes.is_empty() {
+            return;
+        }
+        let temporary = path.with_extension("part");
+        if std::fs::write(&temporary, &bytes).is_ok() {
+            let _ = std::fs::rename(&temporary, &path);
+        }
+    });
+}
+
 fn storage_path(key: &str) -> Result<PathBuf, EnvError> {
     let dir = STORAGE_DIR.get().ok_or(EnvError::StorageUnavailable)?;
     // Keys are fixed names from the core; anything else is kept out of the file name.

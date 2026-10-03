@@ -101,14 +101,32 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
 
 App::~App() = default;
 
+void App::set_image_fetcher(
+    std::function<void(const std::string &address, const std::string &file)> fetcher)
+{
+    images_->set_fetcher(std::move(fetcher));
+}
+
 void App::set_board(std::vector<BoardRow> rows)
 {
+    // The board is refreshed as each row finishes loading. While the set of rows stays the
+    // same the focus and scroll positions are kept; they are only reset for a new set.
+    const bool same_rows = rows.size() == rows_.size();
     rows_ = std::move(rows);
-    column_focus_.assign(rows_.size(), 0);
-    scroll_x_.assign(rows_.size(), 0.0f);
-    scroll_x_target_.assign(rows_.size(), 0.0f);
+    if (!same_rows)
+    {
+        column_focus_.assign(rows_.size(), 0);
+        scroll_x_.assign(rows_.size(), 0.0f);
+        scroll_x_target_.assign(rows_.size(), 0.0f);
+    }
+    for (std::size_t row = 0; row < rows_.size(); ++row)
+        column_focus_[row] =
+            std::min(column_focus_[row], rows_[row].items.empty() ? 0 : rows_[row].items.size() - 1);
     row_focus_ = std::min(row_focus_, rows_.empty() ? 0 : rows_.size() - 1);
+    const float pulse = focus_pulse_;
     follow_focus();
+    if (same_rows)
+        focus_pulse_ = pulse; // a refresh is not a focus move
 }
 
 float App::card_width(const BoardRow &row) const

@@ -395,3 +395,20 @@ pub extern "C" fn stremio_core_board_rows(
         }
     }
 }
+
+/// Starts downloading `url` into the file `path` (for example a poster into the image
+/// cache) and returns at once; the file appears when the download has finished. Returns 0
+/// when the download was started.
+#[no_mangle]
+pub extern "C" fn stremio_core_fetch_file(url: *const c_char, path: *const c_char) -> i32 {
+    let (Some(url), Some(path)) = (c_str(url), c_str(path)) else {
+        set_error("address or path is not valid text");
+        return -1;
+    };
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        set_error("only web addresses can be downloaded");
+        return -2;
+    }
+    env::fetch_to_file(url.to_owned(), PathBuf::from(path));
+    0
+}

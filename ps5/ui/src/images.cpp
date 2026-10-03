@@ -66,6 +66,12 @@ Images::~Images()
 void Images::begin_frame()
 {
     decodes_left_ = kDecodesPerFrame;
+    ++frame_;
+}
+
+void Images::set_fetcher(Fetcher fetcher)
+{
+    fetcher_ = std::move(fetcher);
 }
 
 Images::Texture Images::get(const std::string &address)
@@ -77,9 +83,21 @@ Images::Texture Images::get(const std::string &address)
     if (decodes_left_ == 0)
         return {};
 
-    std::vector<unsigned char> bytes = read_file(folder_ + "/" + image_cache_name(address));
+    // An image that is not in the folder yet is requested once, and the folder is checked
+    // for it again every so often rather than on every frame.
+    const auto waiting = look_again_.find(address);
+    if (waiting != look_again_.end() && frame_ < waiting->second)
+        return {};
+    const std::string file = folder_ + "/" + image_cache_name(address);
+    std::vector<unsigned char> bytes = read_file(file);
     if (bytes.empty())
-        return {}; // not downloaded yet: asked again on a later frame
+    {
+        if (waiting == look_again_.end() && fetcher_)
+            fetcher_(address, file);
+        look_again_[address] = frame_ + kLookEveryFrames;
+        return {};
+    }
+    look_again_.erase(address);
     --decodes_left_;
 
     Texture texture;

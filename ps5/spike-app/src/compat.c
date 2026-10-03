@@ -174,8 +174,10 @@ int dl_iterate_phdr(int (*callback)(void *, size_t, void *), void *data)
 
 /*
  * Unwinder accessors. The app is built with panic=abort, so nothing unwinds; these only
- * satisfy the standard library's backtrace code, which then reports empty frames.
+ * satisfy the standard library's backtrace code, which then reports empty frames. A build
+ * that links the real unwinder defines APP_HAS_UNWINDER and gets its versions instead.
  */
+#ifndef APP_HAS_UNWINDER
 struct _Unwind_Context;
 
 void *_Unwind_FindEnclosingFunction(void *address)
@@ -233,3 +235,4 @@ void _Unwind_SetIP(struct _Unwind_Context *context, unsigned long value)
     (void)context;
     (void)value;
 }
+#endif /* APP_HAS_UNWINDER */

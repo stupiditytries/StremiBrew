@@ -10,6 +10,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +72,29 @@ void arc4random_buf(void *buffer, size_t size)
      * asked for random ones is worse than stopping. */
     if (fill_random(buffer, size) != 0)
         __builtin_trap();
+}
+
+/* The rest of the arc4random family, so that the C library archive's version (which
+ * defines arc4random_buf as well) is never pulled in beside this one. */
+uint32_t arc4random(void)
+{
+    uint32_t value;
+    arc4random_buf(&value, sizeof value);
+    return value;
+}
+
+uint32_t arc4random_uniform(uint32_t bound)
+{
+    if (bound < 2)
+        return 0;
+    /* Reject the values that would make some results more likely than others. */
+    const uint32_t minimum = (uint32_t)(-bound) % bound;
+    for (;;)
+    {
+        const uint32_t value = arc4random();
+        if (value >= minimum)
+            return value % bound;
+    }
 }
 
 /* FreeBSD 12's entropy call, which the console's FreeBSD 11 kernel module lacks. */

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -34,6 +35,9 @@ class App
     ~App();
 
     void set_board(std::vector<BoardRow> rows);
+    // Where images that are not in the cache folder yet are requested (see Images).
+    void set_image_fetcher(
+        std::function<void(const std::string &address, const std::string &file)> fetcher);
     void press(Button button);
     void update(float seconds);
     // Draws one frame into a framebuffer of the given size in pixels.

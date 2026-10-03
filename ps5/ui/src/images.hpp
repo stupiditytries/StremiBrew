@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -34,6 +35,12 @@ class Images
     Texture get(const std::string &address);
     void begin_frame();
 
+    // Called once for each image that is wanted but not in the cache folder, with the
+    // image's address and the file it should be saved as. The host starts the download;
+    // the image appears on screen once the file exists.
+    using Fetcher = std::function<void(const std::string &address, const std::string &file)>;
+    void set_fetcher(Fetcher fetcher);
+
   private:
     static constexpr int kDecodesPerFrame = 3;
 
@@ -41,5 +48,10 @@ class Images
     std::string folder_;
     int decodes_left_ = kDecodesPerFrame;
     std::unordered_map<std::string, Texture> textures_;
+    Fetcher fetcher_;
+    // For images still being downloaded: the frame on which to look for the file again.
+    std::unordered_map<std::string, long> look_again_;
+    long frame_ = 0;
+    static constexpr long kLookEveryFrames = 20;
 };
 } // namespace ui
