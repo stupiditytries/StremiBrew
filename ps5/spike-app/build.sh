@@ -29,10 +29,20 @@ rsync -a --delete --exclude .git --exclude build --exclude dist --exclude src \
     --exclude vendor "$TEMPLATE/" "$app/"
 mkdir -p "$app/src" "$app/vendor"
 cp "$TEMPLATE/src/demo_renderer.cpp" "$TEMPLATE/src/demo_renderer.hpp" "$app/src/"
-cp "$REPO/ps5/spike-app/src/main.cpp" "$REPO/ps5/spike-app/src/compat.c" "$app/src/"
+cp "$REPO"/ps5/spike-app/src/*.cpp "$REPO"/ps5/spike-app/src/*.c "$app/src/"
 cp "$rust_lib" "$app/vendor/libspike_rust.a"
+cp "$REPO/ps5/spike-app/app-symbols.map" "$app/tooling/native/app-symbols.map"
+
 # 3. Identity, then the template's own build.
 (cd "$app" && make init TITLE_ID="$TITLE_ID" APP_NAME="Rust Spike" >/dev/null)
 (cd "$app" && make app USE_CCACHE=0 \
     APP_STATIC_ARCHIVES="vendor/libspike_rust.a")
+
+# 4. Every import must come from a module a game process loads; an import that only
+#    libScePosixForWebKit or libkernel_sys provides is a null pointer on the console.
+if readelf -d "$app/build/llvm-pie.elf" | grep -E 'NEEDED.*lib(ScePosixForWebKit|kernel_sys|kernel_web)'; then
+    echo "error: the app imports from a module that game processes do not load" >&2
+    exit 1
+fi
+readelf -d "$app/build/llvm-pie.elf" | grep NEEDED
 ls -la "$app/dist/$TITLE_ID"

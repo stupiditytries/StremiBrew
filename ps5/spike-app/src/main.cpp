@@ -20,24 +20,39 @@ namespace
 constexpr unsigned kLineCount = 6;
 char lines[kLineCount][64];
 
-void record_results() noexcept
+// Appends one line to the log and closes it, so a crash in the next step still leaves the
+// earlier lines on disk.
+void log_line(const char *text) noexcept
 {
-    std::snprintf(lines[0], sizeof lines[0], "THREADS %u OF 8", spike_threads(8));
-    std::snprintf(lines[1], sizeof lines[1], "FILES STEP %d", spike_files("/download0/spike"));
-    std::snprintf(lines[2], sizeof lines[2], "WALL CLOCK %llu",
-                  static_cast<unsigned long long>(spike_wall_clock_ms()));
-    std::snprintf(lines[3], sizeof lines[3], "SLEEP 250 TOOK %llu",
-                  static_cast<unsigned long long>(spike_monotonic_ms(250)));
-    std::snprintf(lines[4], sizeof lines[4], "HTTP EXAMPLE.COM %d",
-                  spike_http_status("example.com"));
-    std::snprintf(lines[5], sizeof lines[5], "DONE");
-
-    if (std::FILE *log = std::fopen("/download0/spike.log", "w"))
+    if (std::FILE *log = std::fopen("/download0/spike.log", "a"))
     {
-        for (const auto &line : lines)
-            std::fprintf(log, "%s\n", line);
+        std::fprintf(log, "%s\n", text);
         std::fclose(log);
     }
+}
+
+void record_results() noexcept
+{
+    std::remove("/download0/spike.log");
+    log_line("BEGIN THREADS");
+    std::snprintf(lines[0], sizeof lines[0], "THREADS %u OF 8", spike_threads(8));
+    log_line(lines[0]);
+    log_line("BEGIN FILES");
+    std::snprintf(lines[1], sizeof lines[1], "FILES STEP %d", spike_files("/download0/spike"));
+    log_line(lines[1]);
+    log_line("BEGIN CLOCKS");
+    std::snprintf(lines[2], sizeof lines[2], "WALL CLOCK %llu",
+                  static_cast<unsigned long long>(spike_wall_clock_ms()));
+    log_line(lines[2]);
+    std::snprintf(lines[3], sizeof lines[3], "SLEEP 250 TOOK %llu",
+                  static_cast<unsigned long long>(spike_monotonic_ms(250)));
+    log_line(lines[3]);
+    log_line("BEGIN HTTP");
+    std::snprintf(lines[4], sizeof lines[4], "HTTP EXAMPLE.COM %d",
+                  spike_http_status("example.com"));
+    log_line(lines[4]);
+    std::snprintf(lines[5], sizeof lines[5], "DONE");
+    log_line(lines[5]);
 }
 
 void draw_scene(ps5::demo::Canvas &canvas) noexcept
