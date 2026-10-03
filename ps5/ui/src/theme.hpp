@@ -49,6 +49,7 @@ inline constexpr float kFocusOutline = units(0.2f);
 inline constexpr float kNavWidth = units(6.0f);
 inline constexpr float kNavButton = units(4.8f);
 inline constexpr float kNavIcon = units(1.5f);
+inline constexpr float kNavIconRise = units(0.45f); // how far above its button's centre an icon sits
 inline constexpr float kNavGap = units(1.0f);
 inline constexpr float kNavLabelSize = units(0.8f);
 inline constexpr float kTopBarHeight = units(5.5f);

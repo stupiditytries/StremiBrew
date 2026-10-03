@@ -310,9 +310,11 @@ void App::update(float seconds)
 
 void App::draw_navigation()
 {
-    // The buttons sit as a group in the middle of the space under the top bar.
+    // The icons sit as a group in the middle of the screen's height. Each icon is drawn a
+    // little above its button's centre (its name appears beneath it), so the buttons start
+    // that much lower for the icons themselves to be centred.
     const float group = kTabCount * kNavButton + (kTabCount - 1) * kNavGap;
-    float top = kTopBarHeight + (kScreenHeight - kTopBarHeight - group) / 2;
+    float top = (kScreenHeight - group) / 2 + kNavIconRise;
     const float x = (kNavWidth - kNavButton) / 2;
     for (int index = 0; index < kTabCount; ++index)
     {
@@ -333,7 +335,7 @@ void App::draw_navigation()
         // dim, and a tab's name appears only while the focus is on it. The icon keeps its
         // place; the name fades in beneath it.
         const float centre_x = x + kNavButton / 2;
-        const float icon_y = top + kNavButton / 2 - units(0.45f);
+        const float icon_y = top + kNavButton / 2 - kNavIconRise;
         const NVGcolor icon_color =
             selected ? accent() : foreground_solid(0.35f + (0.9f - 0.35f) * reveal);
         draw_icon(vg_, kTabs[index].icon, centre_x, icon_y, kNavIcon, icon_color);
