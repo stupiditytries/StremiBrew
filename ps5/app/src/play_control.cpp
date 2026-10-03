@@ -1,13 +1,20 @@
 #include "play_control.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <thread>
+
+#include <GL/gl.h>
 
 #include "languages.hpp"
 #include "nanovg.h"
+#define NANOVG_GL3 1
+#include "nanovg_gl.h"
 #include "nlohmann/json.hpp"
 
 extern "C"
@@ -28,6 +35,26 @@ namespace ps5
 {
 namespace
 {
+// The choices remembered for each title: one line a title, its fields separated by tabs.
+constexpr char kChoicesFile[] = "/download0/stremio/track-choices.txt";
+constexpr std::size_t kChoicesKept = 300;
+
+std::vector<std::string> fields_of(const std::string &line)
+{
+    std::vector<std::string> fields;
+    std::stringstream stream{line};
+    for (std::string field; std::getline(stream, field, '\t');)
+        fields.push_back(field);
+    return fields;
+}
+
+std::string one_field(std::string text)
+{
+    std::replace(text.begin(), text.end(), '\t', ' ');
+    std::replace(text.begin(), text.end(), '\n', ' ');
+    return text;
+}
+
 double now_seconds()
 {
     timespec time{};
@@ -163,25 +190,77 @@ PlayControl::PlayControl(ui::App &app, CoreLink &core, NVGcontext *vg) : app_{ap
 {
 }
 
+PlayControl::Remembered PlayControl::recall(const std::string &title) const
+{
+    Remembered found;
+    std::ifstream file{kChoicesFile};
+    for (std::string line; std::getline(file, line);)
+    {
+        const std::vector<std::string> fields = fields_of(line);
+        if (fields.size() >= 6 && fields[0] == title)
+        {
+            found.audio_language = fields[1];
+            found.audio_detail = fields[2];
+            found.subtitles = std::atoi(fields[3].c_str());
+            found.subtitle_language = fields[4];
+            found.delay = std::atoi(fields[5].c_str());
+        }
+    }
+    return found;
+}
+
+// Writes the playing title's choices to the file: its line is replaced (or added at the
+// end), and the oldest lines go when there are too many.
+void PlayControl::remember()
+{
+    if (title_.empty())
+        return;
+    std::vector<std::string> lines;
+    {
+        std::ifstream file{kChoicesFile};
+        for (std::string line; std::getline(file, line);)
+            if (line.compare(0, title_.size() + 1, title_ + '\t') != 0)
+                lines.push_back(line);
+    }
+    if (lines.size() >= kChoicesKept)
+        lines.erase(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(lines.size() - kChoicesKept + 1));
+    const Remembered &now = remembered_;
+    lines.push_back(title_ + '\t' + one_field(now.audio_language) + '\t' + one_field(now.audio_detail) +
+                    '\t' + std::to_string(now.subtitles) + '\t' + one_field(now.subtitle_language) +
+                    '\t' + std::to_string(now.delay));
+    std::ofstream file{kChoicesFile, std::ios::trunc};
+    for (const std::string &line : lines)
+        file << line << '\n';
+}
+
 void PlayControl::start(const ui::Stream &stream, const std::string &type, const std::string &id,
                         const std::string &video)
 {
+    title_ = id;
+    remembered_ = recall(id);
+    audio_applied_ = false;
     const std::uint64_t left_at = stremio_core_resume_offset(id.c_str(), video.c_str());
     log_line("playing %s %s from %s, resuming at %.0f s", type.c_str(), video.c_str(),
              stream.addon.c_str(), left_at / 1000.0);
     const int index = stream.index;
     core_.post([index] { stremio_core_player_load(static_cast<std::uint32_t>(index)); });
     subtitle_language_ = app_.account().subtitles_language;
-    player_.open(stream.url, static_cast<double>(left_at) / 1000.0, app_.account().audio_language);
+    // The audio language chosen for this title before, or else the preferred one.
+    player_.open(stream.url, static_cast<double>(left_at) / 1000.0,
+                 remembered_.audio_language.empty() ? app_.account().audio_language
+                                                    : remembered_.audio_language);
+    player_.set_subtitle_delay(remembered_.delay / 1000.0);
 
     shared_ = std::make_shared<Shared>();
     embedded_.clear();
     externals_.clear();
     tracks_known_ = externals_known_ = false;
     subtitle_selected_ = 0;
-    subtitle_delay_ = 0;
-    subtitle_chosen_ = false;
-    preview_time_ = -1e9;
+    subtitle_delay_ = remembered_.delay / 1000.0;
+    // "Off" chosen before for this title stands: nothing is picked automatically.
+    subtitle_chosen_ = remembered_.subtitles == 1;
+    preview_index_ = -1;
+    preview_asked_ = -1;
     reported_start_ = reported_paused_ = reported_end_ = false;
     reported_at_ = 0;
 
@@ -217,18 +296,42 @@ ui::PlayerHandler PlayControl::handler()
     handler.close = [this] { close(); };
     handler.choose_audio = [this](int index) {
         player_.set_audio_track(index);
+        const std::vector<TrackInfo> tracks = player_.audio_tracks();
+        if (index >= 0 && index < static_cast<int>(tracks.size()))
+        {
+            remembered_.audio_language = tracks[static_cast<std::size_t>(index)].language;
+            remembered_.audio_detail = tracks[static_cast<std::size_t>(index)].detail;
+            remember();
+        }
         rebuild_tracks();
     };
     handler.choose_subtitle = [this](int index) {
         subtitle_chosen_ = true;
         choose_subtitle(index);
+        // What kind of choice it was, and its language, for the next video of the title.
+        const int own = static_cast<int>(embedded_.size());
+        if (index <= 0)
+            remembered_.subtitles = 1;
+        else if (index <= own)
+        {
+            remembered_.subtitles = 2;
+            remembered_.subtitle_language = embedded_[static_cast<std::size_t>(index - 1)].language;
+        }
+        else if (index - own - 1 < static_cast<int>(externals_.size()))
+        {
+            remembered_.subtitles = 3;
+            remembered_.subtitle_language = externals_[static_cast<std::size_t>(index - own - 1)].language;
+        }
+        remember();
     };
     handler.set_subtitle_delay = [this](double seconds) {
         subtitle_delay_ = seconds;
         player_.set_subtitle_delay(seconds);
+        remembered_.delay = static_cast<int>(seconds * 1000.0 + (seconds < 0 ? -0.5 : 0.5));
+        remember();
         rebuild_tracks();
     };
-    handler.preview = [this](double seconds) { player_.request_preview(seconds); };
+    handler.preview = [this](double seconds) { preview_asked_ = seconds; };
     return handler;
 }
 
@@ -328,28 +431,7 @@ void PlayControl::frame(int width, int height)
     player_.draw(width, height);
     ui::Playback status = player_.status();
 
-    // The scrubbing picture, as an image the UI can draw.
-    std::vector<std::uint8_t> pixels;
-    int picture_width = 0, picture_height = 0;
-    double picture_time = 0;
-    if (player_.take_preview(pixels, picture_width, picture_height, picture_time))
-    {
-        if (preview_image_ != 0 && picture_width == preview_width_ && picture_height == preview_height_)
-        {
-            nvgUpdateImage(vg_, preview_image_, pixels.data());
-        }
-        else
-        {
-            if (preview_image_ != 0)
-                nvgDeleteImage(vg_, preview_image_);
-            preview_image_ = nvgCreateImageRGBA(vg_, picture_width, picture_height, 0, pixels.data());
-            preview_width_ = picture_width;
-            preview_height_ = picture_height;
-        }
-        preview_time_ = picture_time;
-    }
-    status.preview_image = preview_image_;
-    status.preview_time = preview_time_;
+    show_preview(status);
 
     // The tracks, once the video has opened; the preferred subtitle language is picked
     // from the video's own tracks when it has one.
@@ -357,9 +439,27 @@ void PlayControl::frame(int width, int height)
     {
         tracks_known_ = true;
         embedded_ = player_.subtitle_tracks();
-        if (!subtitle_chosen_ && !subtitle_language_.empty())
+        // The audio track chosen for this title before: the player has already gone by
+        // its language; among several in that language, the same kind is picked.
+        if (!remembered_.audio_language.empty())
+        {
+            const std::vector<TrackInfo> tracks = player_.audio_tracks();
+            for (std::size_t index = 0; index < tracks.size(); ++index)
+                if (ui::same_language(tracks[index].language, remembered_.audio_language) &&
+                    tracks[index].detail == remembered_.audio_detail &&
+                    static_cast<int>(index) != player_.audio_track())
+                {
+                    player_.set_audio_track(static_cast<int>(index));
+                    break;
+                }
+        }
+        // Subtitles from the video's own tracks: in the language chosen for this title
+        // before (unless that choice was an add-on's), or else the preferred language.
+        const std::string &language =
+            remembered_.subtitles >= 2 ? remembered_.subtitle_language : subtitle_language_;
+        if (!subtitle_chosen_ && !language.empty() && remembered_.subtitles != 3)
             for (std::size_t index = 0; index < embedded_.size(); ++index)
-                if (ui::same_language(embedded_[index].language, subtitle_language_))
+                if (ui::same_language(embedded_[index].language, language))
                 {
                     subtitle_chosen_ = true;
                     choose_subtitle(static_cast<int>(index) + 1);
@@ -389,17 +489,19 @@ void PlayControl::frame(int width, int height)
         {
             externals_known_ = true;
             // The preferred language first, then the rest by language.
+            const std::string language =
+                remembered_.subtitles >= 2 ? remembered_.subtitle_language : subtitle_language_;
             std::stable_sort(externals_.begin(), externals_.end(), [&](const External &left, const External &right) {
-                const bool first = ui::same_language(left.language, subtitle_language_);
-                const bool second = ui::same_language(right.language, subtitle_language_);
+                const bool first = ui::same_language(left.language, language);
+                const bool second = ui::same_language(right.language, language);
                 if (first != second)
                     return first;
                 return ui::language_name(left.language) < ui::language_name(right.language);
             });
             log_line("subtitles: %zu offered by add-ons", externals_.size());
             // With nothing chosen yet, the first one in the preferred language is.
-            if (!subtitle_chosen_ && !subtitle_language_.empty() && !externals_.empty() &&
-                ui::same_language(externals_.front().language, subtitle_language_))
+            if (!subtitle_chosen_ && !language.empty() && !externals_.empty() &&
+                ui::same_language(externals_.front().language, language))
             {
                 subtitle_chosen_ = true;
                 choose_subtitle(static_cast<int>(embedded_.size()) + 1);
@@ -440,5 +542,62 @@ void PlayControl::frame(int width, int height)
         });
     }
     app_.set_playback(status);
+}
+// While the user scrubs, the picture the player has made for the marker's moment is put
+// in a texture the UI draws. The texture is 16 bits a channel: this console's driver takes
+// some 40 ms over an 8-bit upload and a few over a 16-bit one.
+void PlayControl::show_preview(ui::Playback &status)
+{
+    if (preview_asked_ < 0)
+        return;
+    std::vector<std::uint8_t> pixels;
+    int width = 0, height = 0;
+    double time = 0;
+    if (!player_.preview(preview_asked_, pixels, width, height, preview_index_, time))
+    {
+        preview_index_ = -1;
+        return;
+    }
+    if (!pixels.empty())
+    {
+        preview_wide_.resize(pixels.size());
+        for (std::size_t index = 0; index < pixels.size(); ++index)
+            preview_wide_[index] = static_cast<std::uint16_t>(pixels[index] * 257);
+        const bool fresh = preview_texture_ == 0 || width != preview_width_ || height != preview_height_;
+        if (fresh)
+        {
+            if (preview_image_ != 0)
+                nvgDeleteImage(vg_, preview_image_); // takes the old texture with it
+            glGenTextures(1, &preview_texture_);
+        }
+        glBindTexture(GL_TEXTURE_2D, preview_texture_);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        if (fresh)
+        {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16, width, height, 0, GL_RGBA, GL_UNSIGNED_SHORT,
+                         preview_wide_.data());
+        }
+        else
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_SHORT,
+                            preview_wide_.data());
+        }
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (fresh)
+        {
+            preview_image_ = nvglCreateImageFromHandleGL3(vg_, preview_texture_, width, height, 0);
+            preview_width_ = width;
+            preview_height_ = height;
+        }
+    }
+    preview_time_ = time;
+    status.preview_image = preview_image_;
+    status.preview_time = preview_time_;
 }
 } // namespace ps5

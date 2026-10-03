@@ -70,10 +70,12 @@ class Player
     // Shows subtitles this many seconds later than they are timed (earlier when negative).
     void set_subtitle_delay(double seconds);
 
-    // Asks for a small picture of the video at `seconds`; take_preview hands over the
-    // newest one made (RGBA, top row first) and the time that was asked for.
-    void request_preview(double seconds);
-    bool take_preview(std::vector<std::uint8_t> &pixels, int &width, int &height, double &seconds);
+    // The small picture of the video nearest `seconds`, of those made so far (they are
+    // made in the background from when the video opens). `index` says which picture the
+    // caller already has: `pixels` (RGBA, top row first) is only filled when the picture
+    // is a different one, and `index` is then updated. `time` is the moment it shows.
+    bool preview(double seconds, std::vector<std::uint8_t> &pixels, int &width, int &height,
+                 int &index, double &time);
 
     // On the drawing thread, with the framebuffer to draw into bound: takes the picture
     // that is due and draws it, fitted to `width` x `height` pixels.
@@ -81,50 +83,24 @@ class Player
 
   private:
     struct Session;
-    // How pictures get to the graphics card.
-    enum class Route
-    {
-        Untested,
-        Buffers,  // copied into memory the card reads directly: no driver call per picture
-        Textures, // uploaded as textures, which this console's driver does slowly
-    };
-    bool create_programs();
-    void set_colours(unsigned program, const void *frame);
+    bool create_program();
     bool describe(const void *frame);
-    bool upload_textures(const void *frame);
-    bool create_buffers();
-    void copy_to_buffers(const void *frame);
-    void draw_picture(bool buffers, int width, int height);
-    void show(const void *frame, int width, int height);
+    void upload(const void *frame);
 
     std::shared_ptr<Session> session_;
-    unsigned texture_program_ = 0, buffer_program_ = 0, vertex_array_ = 0;
-    unsigned planes_[3] = {};
-    // The pictures' layout: pixel format, size, bytes per sample and each plane's size.
+    unsigned program_ = 0, vertex_array_ = 0, sheet_ = 0;
+    // The pictures' layout: pixel format, size and bytes per sample; and the sheet their
+    // planes are packed into, with each plane's area of it (left, top, width, height).
     int format_ = -1, width_ = 0, height_ = 0, bytes_ = 1;
-    int plane_width_[3] = {}, plane_height_[3] = {};
-    bool textures_sized_ = false;
-    std::vector<std::uint16_t> widened_; // an 8-bit plane as 16-bit samples, for the upload
-    // The buffer route: three sets of planes used in turn, so the card is never reading
-    // the one being written.
-    struct Slot
-    {
-        unsigned buffer = 0;
-        unsigned char *memory = nullptr;
-        unsigned textures[3] = {};
-    };
-    static constexpr int kSlots = 3;
-    Slot slots_[kSlots];
-    std::size_t plane_offset_[3] = {};
-    bool buffers_sized_ = false;
-    int slot_ = 0;
-    Route route_[2] = {Route::Untested, Route::Untested}; // by bytes per sample
-    bool shown_from_buffers_ = false;
+    int sheet_width_ = 0, sheet_height_ = 0;
+    int area_[3][4] = {};
+    std::vector<std::uint16_t> packed_;
+    bool sheet_sized_ = false;
 
     bool has_picture_ = false;
     int shown_serial_ = -1;
     float picture_aspect_ = 16.0f / 9.0f;
-    double slow_logged_ = 0;
-    unsigned long skipped_ = 0;
+    unsigned long skipped_ = 0, shown_ = 0;
+    double reported_ = 0, longest_ = 0;
 };
 } // namespace ps5

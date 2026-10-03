@@ -58,7 +58,11 @@ constexpr std::size_t kPictures = 5;
 constexpr std::size_t kPacketsAhead = 1440;
 constexpr std::size_t kBytesAhead = std::size_t{192} << 20;
 constexpr int kIoBuffer = 1 << 19;
-constexpr int kPreviewWidth = 384;
+// The small pictures shown while scrubbing: their width, and how many seconds of video
+// each stands for (more in a long video, so there are never more than kThumbsMost).
+constexpr int kThumbWidth = 256;
+constexpr double kThumbEvery = 10.0;
+constexpr int kThumbsMost = 150;
 
 double now_seconds()
 {
@@ -532,13 +536,11 @@ struct Player::Session
     bool audio_swapping = false, audio_parked = false;
     std::vector<Cue> cues; // the subtitles on hand, in order of their start
     double subtitle_delay = 0;
-    // The scrubbing picture: the time asked for, and the newest one made.
-    bool preview_wanted = false;
-    double preview_time = 0;
-    std::vector<std::uint8_t> preview_pixels;
-    int preview_width = 0, preview_height = 0;
-    double preview_made_for = 0;
-    bool preview_fresh = false;
+    // The scrubbing pictures: one for each `thumb_every` seconds of the video, made in
+    // the background from when the video opens (an empty one is not made yet).
+    std::vector<std::vector<std::uint8_t>> thumbs;
+    double thumb_every = 0;
+    int thumb_width = 0, thumb_height = 0;
 
     // FFmpeg. After opening, each object is used by one thread only.
     Input input;
@@ -548,7 +550,6 @@ struct Player::Session
     double video_base = 0, audio_base = 0, subtitle_base = 0; // seconds per timestamp unit
     double origin = 0;                                        // the file's first timestamp, in seconds
     std::thread reader, video_thread, audio_thread, preview_thread;
-    bool preview_started = false; // guarded by `mutex`
 
     ~Session()
     {
@@ -656,10 +657,11 @@ struct Player::Session
         const double length = format->duration != AV_NOPTS_VALUE
                                   ? static_cast<double>(format->duration) / AV_TIME_BASE
                                   : 0.0;
-        note("opened: %s %dx%d %s, %zu audio tracks (playing %d), %zu text subtitles, %.0f s",
+        note("opened: %s %dx%d %s at %.2f pictures a second, %zu audio tracks (playing %d), %zu text subtitles, %.0f s",
              avcodec_get_name(parameters->codec_id), parameters->width, parameters->height,
-             av_get_pix_fmt_name(static_cast<AVPixelFormat>(parameters->format)), audios.size(),
-             choice, subtitles.size(), length);
+             av_get_pix_fmt_name(static_cast<AVPixelFormat>(parameters->format)),
+             av_q2d(format->streams[video_index]->avg_frame_rate), audios.size(), choice,
+             subtitles.size(), length);
         std::lock_guard lock{mutex};
         has_audio = audio != nullptr;
         duration = length;
@@ -784,6 +786,7 @@ struct Player::Session
         {
             video_thread = std::thread{[this] { run_video(); }};
             audio_thread = std::thread{[this] { run_audio(); }};
+            preview_thread = std::thread{[this] { run_preview(); }};
         }
         AVFormatContext *format = input.format;
         AVPacket *packet = av_packet_alloc();
@@ -894,6 +897,8 @@ struct Player::Session
             video_thread.join();
         if (audio_thread.joinable())
             audio_thread.join();
+        if (preview_thread.joinable())
+            preview_thread.join();
     }
 
     void run_video()
@@ -1166,10 +1171,21 @@ struct Player::Session
     }
 
     // The scrubbing pictures: the file opened a second time, read on its own, with a
-    // decoder that only does key frames. Each request jumps to the key frame before the
-    // time asked for and decodes that one picture.
+    // decoder that only does key frames. Starting from where playback starts and working
+    // outwards, it jumps to each stretch of the video in turn and makes a small copy of
+    // the key frame there, so that by the time the user scrubs the pictures are on hand.
     void run_preview()
     {
+        double length, from;
+        {
+            std::lock_guard lock{mutex};
+            length = duration;
+            from = seek_wanted ? seek_to : 0.0;
+        }
+        if (length <= 0)
+            return;
+        const double every = std::max(kThumbEvery, length / kThumbsMost);
+        const int count = std::max(1, static_cast<int>(length / every));
         Input second;
         std::string why;
         if (!second.open(url, stop, why))
@@ -1182,28 +1198,36 @@ struct Player::Session
         if (decoder == nullptr)
             return;
         decoder->skip_frame = AVDISCARD_NONKEY;
+        {
+            std::lock_guard lock{mutex};
+            thumbs.assign(static_cast<std::size_t>(count), {});
+            thumb_every = every;
+        }
         AVPacket *packet = av_packet_alloc();
         AVFrame *frame = av_frame_alloc();
         const double first = second.origin();
-        while (!stop)
+        const int centre = std::clamp(static_cast<int>(from / every), 0, count - 1);
+        const double started = now_seconds();
+        int made = 0;
+        // Outwards from the starting point: centre, centre + 1, centre - 1, centre + 2, ...
+        for (int step = 0; step < 2 * count && !stop; ++step)
         {
-            double target;
+            const int which = centre + ((step & 1) ? (step + 1) / 2 : -(step / 2));
+            if (which < 0 || which >= count)
+                continue;
             {
+                // Playback comes first: while it is waiting for data, this waits too.
                 std::unique_lock lock{mutex};
-                if (!preview_wanted)
-                {
-                    wake.wait_for(lock, std::chrono::milliseconds(50));
-                    continue;
-                }
-                preview_wanted = false;
-                target = preview_time;
+                while (!stop && (starved || !video_primed) && !paused && !failed)
+                    wake.wait_for(lock, std::chrono::milliseconds(100));
             }
+            const double target = (which + 0.5) * every;
             const auto stamp = static_cast<std::int64_t>((target + first) * AV_TIME_BASE);
             if (avformat_seek_file(second.format, -1, INT64_MIN, stamp, stamp, 0) < 0)
                 continue;
             avcodec_flush_buffers(decoder);
-            bool made = false;
-            for (int tries = 0; tries < 400 && !made && !stop; ++tries)
+            bool done = false;
+            for (int tries = 0; tries < 400 && !done && !stop; ++tries)
             {
                 if (av_read_frame(second.format, packet) < 0)
                     break;
@@ -1217,23 +1241,23 @@ struct Player::Session
                     {
                         std::vector<std::uint8_t> pixels;
                         int height = 0;
-                        if (small_copy(frame, kPreviewWidth, pixels, height))
+                        if (small_copy(frame, kThumbWidth, pixels, height))
                         {
                             std::lock_guard lock{mutex};
-                            preview_pixels = std::move(pixels);
-                            preview_width = kPreviewWidth;
-                            preview_height = height;
-                            preview_made_for = target;
-                            preview_fresh = true;
+                            thumbs[static_cast<std::size_t>(which)] = std::move(pixels);
+                            thumb_width = kThumbWidth;
+                            thumb_height = height;
+                            ++made;
                         }
-                        made = true;
                         av_frame_unref(frame);
                     }
                     avcodec_flush_buffers(decoder);
+                    done = true;
                 }
                 av_packet_unref(packet);
             }
         }
+        note("scrubbing pictures: %d of %d made in %.0f s", made, count, now_seconds() - started);
         av_frame_free(&frame);
         av_packet_free(&packet);
         avcodec_free_context(&decoder);
@@ -1283,8 +1307,6 @@ void Player::close()
     std::thread{[session] {
         if (session->reader.joinable())
             session->reader.join();
-        if (session->preview_thread.joinable())
-            session->preview_thread.join();
     }}.detach();
 }
 
@@ -1428,40 +1450,38 @@ void Player::set_subtitle_delay(double seconds)
     session_->subtitle_delay = seconds;
 }
 
-void Player::request_preview(double seconds)
-{
-    if (session_ == nullptr)
-        return;
-    Session *session = session_.get();
-    std::lock_guard lock{session->mutex};
-    if (!session->opened || session->failed)
-        return;
-    session->preview_wanted = true;
-    session->preview_time = seconds;
-    if (!session->preview_started)
-    {
-        session->preview_started = true;
-        session->preview_thread = std::thread{[session] { session->run_preview(); }};
-    }
-    session->wake.notify_all();
-}
-
-bool Player::take_preview(std::vector<std::uint8_t> &pixels, int &width, int &height, double &seconds)
+bool Player::preview(double seconds, std::vector<std::uint8_t> &pixels, int &width, int &height,
+                     int &index, double &time)
 {
     if (session_ == nullptr)
         return false;
     std::lock_guard lock{session_->mutex};
-    if (!session_->preview_fresh)
+    const auto &thumbs = session_->thumbs;
+    if (thumbs.empty() || session_->thumb_every <= 0)
         return false;
-    session_->preview_fresh = false;
-    pixels = std::move(session_->preview_pixels);
-    width = session_->preview_width;
-    height = session_->preview_height;
-    seconds = session_->preview_made_for;
-    return true;
+    const int count = static_cast<int>(thumbs.size());
+    const int wanted = std::clamp(static_cast<int>(seconds / session_->thumb_every), 0, count - 1);
+    // The picture for that stretch of the video, or failing that a neighbour's.
+    for (const int offset : {0, -1, 1})
+    {
+        const int candidate = wanted + offset;
+        if (candidate < 0 || candidate >= count || thumbs[static_cast<std::size_t>(candidate)].empty())
+            continue;
+        time = (candidate + 0.5) * session_->thumb_every;
+        width = session_->thumb_width;
+        height = session_->thumb_height;
+        // The pixels are only copied out when it is a different picture from last time.
+        if (candidate != index)
+            pixels = thumbs[static_cast<std::size_t>(candidate)];
+        else
+            pixels.clear();
+        index = candidate;
+        return true;
+    }
+    return false;
 }
 
-bool Player::create_programs()
+bool Player::create_program()
 {
     static const char kVertex[] = R"(#version 330 core
 out vec2 uv;
@@ -1471,47 +1491,22 @@ void main() {
     gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
-    // The planes as ordinary textures, which the card filters itself.
-    static const char kFromTextures[] = R"(#version 330 core
-uniform sampler2D plane_y;
-uniform sampler2D plane_u;
-uniform sampler2D plane_v;
-#define SAMPLE_Y texture(plane_y, uv).r
-#define SAMPLE_U texture(plane_u, uv).r
-#define SAMPLE_V texture(plane_v, uv).r
-)";
-    // The planes as plain buffers of samples: each is read at the four samples round the
-    // point wanted and blended, which is what a filtered texture read does.
-    static const char kFromBuffers[] = R"(#version 330 core
-uniform samplerBuffer plane_y;
-uniform samplerBuffer plane_u;
-uniform samplerBuffer plane_v;
-uniform ivec2 size_y;
-uniform ivec2 size_c;
-float tap(samplerBuffer plane, ivec2 size, ivec2 at) {
-    at = clamp(at, ivec2(0), size - 1);
-    return texelFetch(plane, at.y * size.x + at.x).r;
-}
-float blend(samplerBuffer plane, ivec2 size, vec2 where) {
-    vec2 at = where * vec2(size) - 0.5;
-    vec2 base = floor(at);
-    vec2 part = at - base;
-    ivec2 corner = ivec2(base);
-    return mix(mix(tap(plane, size, corner), tap(plane, size, corner + ivec2(1, 0)), part.x),
-               mix(tap(plane, size, corner + ivec2(0, 1)), tap(plane, size, corner + ivec2(1, 1)), part.x),
-               part.y);
-}
-#define SAMPLE_Y blend(plane_y, size_y, uv)
-#define SAMPLE_U blend(plane_u, size_c, uv)
-#define SAMPLE_V blend(plane_v, size_c, uv)
-)";
-    // Y'CbCr to R'G'B', and for HDR video on to SDR: to light (PQ or HLG), to the BT.709
-    // primaries, the brightest channel brought under SDR white along the BT.2390 curve
-    // (dark and mid tones are left alone, highlights are rolled off), and back to a
+    // The three planes share one texture (see upload). Each is read from its own area of
+    // it, kept half a sample inside the area's edges so that the card's blending of
+    // neighbouring samples never reaches into another plane.
+    //
+    // Then Y'CbCr to R'G'B', and for HDR video on to SDR: to light (PQ or HLG), to the
+    // BT.709 primaries, the brightest channel brought under SDR white along the BT.2390
+    // curve (dark and mid tones are left alone, highlights are rolled off), and back to a
     // gamma signal.
-    static const char kColour[] = R"(
+    static const char kFragment[] = R"(#version 330 core
 in vec2 uv;
 out vec4 color;
+uniform sampler2D sheet;
+uniform vec2 sheet_size;
+uniform vec4 area_y;  // left, top, width, height, in samples
+uniform vec4 area_u;
+uniform vec4 area_v;
 uniform vec2 luma;    // scale and offset
 uniform vec2 chroma;
 uniform vec2 weights; // the red and blue luma weights
@@ -1521,6 +1516,10 @@ uniform float peak;   // the video's brightest white, in nits
 const float m1 = 0.1593017578125, m2 = 78.84375;
 const float c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
 const float white = 203.0;
+float plane(vec4 area) {
+    vec2 at = area.xy + clamp(uv * area.zw, vec2(0.5), area.zw - 0.5);
+    return texture(sheet, at / sheet_size).r;
+}
 vec3 pq_to_nits(vec3 signal) {
     vec3 p = pow(max(signal, 0.0), vec3(1.0 / m2));
     return 10000.0 * pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1));
@@ -1550,9 +1549,9 @@ float roll_off(float nits) {
     return pq_to_nits(vec3(e * source)).x;
 }
 void main() {
-    float y = SAMPLE_Y * luma.x + luma.y;
-    float cb = SAMPLE_U * chroma.x + chroma.y;
-    float cr = SAMPLE_V * chroma.x + chroma.y;
+    float y = plane(area_y) * luma.x + luma.y;
+    float cb = plane(area_u) * chroma.x + chroma.y;
+    float cr = plane(area_v) * chroma.x + chroma.y;
     float kr = weights.x, kb = weights.y;
     float r = y + 2.0 * (1.0 - kr) * cr;
     float b = y + 2.0 * (1.0 - kb) * cb;
@@ -1570,10 +1569,9 @@ void main() {
     color = vec4(rgb, 1.0);
 }
 )";
-    const auto compile = [](GLenum type, const char *first, const char *second) {
+    const auto compile = [](GLenum type, const char *source) {
         const GLuint shader = glCreateShader(type);
-        const char *sources[2] = {first, second};
-        glShaderSource(shader, second != nullptr ? 2 : 1, sources, nullptr);
+        glShaderSource(shader, 1, &source, nullptr);
         glCompileShader(shader);
         GLint compiled = GL_FALSE;
         glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
@@ -1585,80 +1583,40 @@ void main() {
         }
         return shader;
     };
-    const auto link = [&](const char *sampling) -> GLuint {
-        const GLuint vertex = compile(GL_VERTEX_SHADER, kVertex, nullptr);
-        const GLuint fragment = compile(GL_FRAGMENT_SHADER, sampling, kColour);
-        const GLuint program = glCreateProgram();
-        glAttachShader(program, vertex);
-        glAttachShader(program, fragment);
-        glLinkProgram(program);
-        glDeleteShader(vertex);
-        glDeleteShader(fragment);
-        GLint linked = GL_FALSE;
-        glGetProgramiv(program, GL_LINK_STATUS, &linked);
-        if (linked != GL_TRUE)
-        {
-            glDeleteProgram(program);
-            return 0;
-        }
-        glUseProgram(program);
-        glUniform1i(glGetUniformLocation(program, "plane_y"), 0);
-        glUniform1i(glGetUniformLocation(program, "plane_u"), 1);
-        glUniform1i(glGetUniformLocation(program, "plane_v"), 2);
-        glUseProgram(0);
-        return program;
-    };
-    texture_program_ = link(kFromTextures);
-    if (texture_program_ == 0)
+    const GLuint vertex = compile(GL_VERTEX_SHADER, kVertex);
+    const GLuint fragment = compile(GL_FRAGMENT_SHADER, kFragment);
+    program_ = glCreateProgram();
+    glAttachShader(program_, vertex);
+    glAttachShader(program_, fragment);
+    glLinkProgram(program_);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program_, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE)
     {
         note("picture program did not link");
+        glDeleteProgram(program_);
+        program_ = 0;
         return false;
     }
-    buffer_program_ = link(kFromBuffers);
-    if (buffer_program_ == 0)
-    {
-        note("buffer picture program did not link; pictures go as textures");
-        route_[0] = route_[1] = Route::Textures;
-    }
+    glUseProgram(program_);
+    glUniform1i(glGetUniformLocation(program_, "sheet"), 0);
+    glUseProgram(0);
     glGenVertexArrays(1, &vertex_array_);
-    glGenTextures(3, planes_);
-    for (const GLuint plane : planes_)
-    {
-        glBindTexture(GL_TEXTURE_2D, plane);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
+    glGenTextures(1, &sheet_);
+    glBindTexture(GL_TEXTURE_2D, sheet_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
     return true;
 }
 
-void Player::set_colours(unsigned program, const void *picture)
-{
-    if (program == 0)
-        return;
-    const auto *frame = static_cast<const AVFrame *>(picture);
-    const AVPixFmtDescriptor *layout = planar_layout(frame);
-    const Colours colours = colours_of(frame, layout->comp[0].depth, bytes_);
-    glUseProgram(program);
-    glUniform2f(glGetUniformLocation(program, "luma"), colours.luma[0], colours.luma[1]);
-    glUniform2f(glGetUniformLocation(program, "chroma"), colours.chroma[0], colours.chroma[1]);
-    glUniform2f(glGetUniformLocation(program, "weights"), colours.kr, colours.kb);
-    glUniform1i(glGetUniformLocation(program, "transfer"), colours.pq ? 1 : colours.hlg ? 2 : 0);
-    glUniform1i(glGetUniformLocation(program, "wide"), colours.wide ? 1 : 0);
-    glUniform1f(glGetUniformLocation(program, "peak"), colours.peak);
-    if (program == buffer_program_)
-    {
-        glUniform2i(glGetUniformLocation(program, "size_y"), plane_width_[0], plane_height_[0]);
-        glUniform2i(glGetUniformLocation(program, "size_c"), plane_width_[1], plane_height_[1]);
-    }
-    glUseProgram(0);
-}
-
 // Takes note of a picture's layout. When it differs from the last one's (a new video),
-// the textures and buffers are made afresh and the programs told its colours. False for
-// a layout this does not handle.
+// the sheet is laid out afresh and the program told the picture's colours. False for a
+// layout this does not handle.
 bool Player::describe(const void *picture)
 {
     const auto *frame = static_cast<const AVFrame *>(picture);
@@ -1670,16 +1628,36 @@ bool Player::describe(const void *picture)
     format_ = frame->format;
     width_ = frame->width;
     height_ = frame->height;
-    bytes_ = layout->comp[0].depth > 8 ? 2 : 1;
+    const int depth = layout->comp[0].depth;
+    bytes_ = depth > 8 ? 2 : 1;
+    const int chroma_width = AV_CEIL_RSHIFT(frame->width, layout->log2_chroma_w);
+    const int chroma_height = AV_CEIL_RSHIFT(frame->height, layout->log2_chroma_h);
+    // The sheet: the luma plane, and under it the two chroma planes side by side.
+    const int areas[3][4] = {{0, 0, frame->width, frame->height},
+                             {0, frame->height, chroma_width, chroma_height},
+                             {chroma_width, frame->height, chroma_width, chroma_height}};
+    std::memcpy(area_, areas, sizeof area_);
+    sheet_width_ = std::max(frame->width, 2 * chroma_width);
+    sheet_height_ = frame->height + chroma_height;
+    packed_.assign(static_cast<std::size_t>(sheet_width_) * static_cast<std::size_t>(sheet_height_), 0);
+    sheet_sized_ = false;
+
+    const Colours colours = colours_of(frame, depth, bytes_);
+    glUseProgram(program_);
+    glUniform2f(glGetUniformLocation(program_, "sheet_size"), static_cast<float>(sheet_width_),
+                static_cast<float>(sheet_height_));
+    static const char *const kAreas[3] = {"area_y", "area_u", "area_v"};
     for (int plane = 0; plane < 3; ++plane)
-    {
-        plane_width_[plane] = plane == 0 ? frame->width : AV_CEIL_RSHIFT(frame->width, layout->log2_chroma_w);
-        plane_height_[plane] = plane == 0 ? frame->height : AV_CEIL_RSHIFT(frame->height, layout->log2_chroma_h);
-    }
-    textures_sized_ = false;
-    buffers_sized_ = false;
-    set_colours(texture_program_, frame);
-    set_colours(buffer_program_, frame);
+        glUniform4f(glGetUniformLocation(program_, kAreas[plane]), static_cast<float>(area_[plane][0]),
+                    static_cast<float>(area_[plane][1]), static_cast<float>(area_[plane][2]),
+                    static_cast<float>(area_[plane][3]));
+    glUniform2f(glGetUniformLocation(program_, "luma"), colours.luma[0], colours.luma[1]);
+    glUniform2f(glGetUniformLocation(program_, "chroma"), colours.chroma[0], colours.chroma[1]);
+    glUniform2f(glGetUniformLocation(program_, "weights"), colours.kr, colours.kb);
+    glUniform1i(glGetUniformLocation(program_, "transfer"), colours.pq ? 1 : colours.hlg ? 2 : 0);
+    glUniform1i(glGetUniformLocation(program_, "wide"), colours.wide ? 1 : 0);
+    glUniform1f(glGetUniformLocation(program_, "peak"), colours.peak);
+    glUseProgram(0);
     const AVRational shape = frame->sample_aspect_ratio;
     picture_aspect_ = static_cast<float>(frame->width) / static_cast<float>(frame->height) *
                       (shape.num > 0 && shape.den > 0 ? static_cast<float>(av_q2d(shape)) : 1.0f);
@@ -1689,247 +1667,52 @@ bool Player::describe(const void *picture)
     return true;
 }
 
-// The planes always go up as 16-bit textures. This console's driver takes some 40 ms over
-// any 8-bit one, whatever its size (which no video's frame rate survives), and a few
-// milliseconds over a 16-bit one, so 8-bit video is widened first. A sample v becomes
-// v * 257, which is the same fraction of the 16-bit range as v is of the 8-bit one, so the
-// colour arithmetic does not change.
-bool Player::upload_textures(const void *picture)
+// Sends a picture to the graphics card: its three planes are copied into one sheet of
+// 16-bit samples, and the sheet goes up as a single texture.
+//
+// Both choices are for this console's driver. Every texture upload costs it several
+// milliseconds whatever the texture's size, so one upload a picture is much cheaper than
+// three; and an 8-bit texture costs it some 40 ms, which no video's frame rate survives,
+// so 8-bit video is widened. (A sample v becomes v * 257, the same fraction of the 16-bit
+// range as v is of the 8-bit one, so the colour arithmetic does not change.)
+void Player::upload(const void *picture)
 {
     const auto *frame = static_cast<const AVFrame *>(picture);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     for (int plane = 0; plane < 3; ++plane)
     {
-        const int width = plane_width_[plane], height = plane_height_[plane];
-        const void *samples = frame->data[plane];
-        if (bytes_ == 1)
+        const int width = area_[plane][2], height = area_[plane][3];
+        std::uint16_t *to = packed_.data() + static_cast<std::size_t>(area_[plane][1]) * sheet_width_ +
+                            area_[plane][0];
+        const std::uint8_t *from = frame->data[plane];
+        for (int y = 0; y < height; ++y, to += sheet_width_, from += frame->linesize[plane])
         {
-            widened_.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
-            std::uint16_t *to = widened_.data();
-            const std::uint8_t *from = frame->data[plane];
-            for (int y = 0; y < height; ++y, to += width, from += frame->linesize[plane])
+            if (bytes_ == 2)
+                std::memcpy(to, from, static_cast<std::size_t>(width) * 2);
+            else
                 for (int x = 0; x < width; ++x)
                     to[x] = static_cast<std::uint16_t>(from[x] * 257);
-            samples = widened_.data();
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         }
-        else
-        {
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, frame->linesize[plane] / 2);
-        }
-        glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(plane));
-        glBindTexture(GL_TEXTURE_2D, planes_[plane]);
-        if (!textures_sized_)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, width, height, 0, GL_RED, GL_UNSIGNED_SHORT, samples);
-        else
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED, GL_UNSIGNED_SHORT, samples);
-        glBindTexture(GL_TEXTURE_2D, 0);
     }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glActiveTexture(GL_TEXTURE0);
-    textures_sized_ = true;
-    return true;
-}
-
-// Makes the buffer route's storage for the current layout: for each slot one buffer the
-// app can write to at any time, and a buffer texture per plane looking into it.
-bool Player::create_buffers()
-{
-    for (Slot &slot : slots_)
-    {
-        if (slot.buffer != 0)
-        {
-            glBindBuffer(GL_TEXTURE_BUFFER, slot.buffer);
-            glUnmapBuffer(GL_TEXTURE_BUFFER);
-            glDeleteBuffers(1, &slot.buffer);
-            glDeleteTextures(3, slot.textures);
-        }
-        slot = Slot{};
-    }
-    GLint alignment = 1, most = 0;
-    glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &alignment);
-    glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &most);
-    alignment = std::max(alignment, 64);
-    std::size_t total = 0, sizes[3];
-    for (int plane = 0; plane < 3; ++plane)
-    {
-        plane_offset_[plane] = total;
-        sizes[plane] = static_cast<std::size_t>(plane_width_[plane]) * plane_height_[plane] * bytes_;
-        total += (sizes[plane] + alignment - 1) / alignment * alignment;
-    }
-    if (static_cast<std::size_t>(most) < static_cast<std::size_t>(plane_width_[0]) * plane_height_[0])
-    {
-        note("buffer textures are too small here (%d)", most);
-        return false;
-    }
-    while (glGetError() != GL_NO_ERROR)
-    {
-    }
-    const GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-    for (Slot &slot : slots_)
-    {
-        glGenBuffers(1, &slot.buffer);
-        glBindBuffer(GL_TEXTURE_BUFFER, slot.buffer);
-        glBufferStorage(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(total), nullptr, access);
-        slot.memory = static_cast<unsigned char *>(
-            glMapBufferRange(GL_TEXTURE_BUFFER, 0, static_cast<GLsizeiptr>(total), access));
-        glGenTextures(3, slot.textures);
-        for (int plane = 0; plane < 3; ++plane)
-        {
-            glBindTexture(GL_TEXTURE_BUFFER, slot.textures[plane]);
-            glTexBufferRange(GL_TEXTURE_BUFFER, bytes_ == 2 ? GL_R16 : GL_R8, slot.buffer,
-                             static_cast<GLintptr>(plane_offset_[plane]),
-                             static_cast<GLsizeiptr>(sizes[plane]));
-        }
-        glBindTexture(GL_TEXTURE_BUFFER, 0);
-        if (slot.memory == nullptr)
-        {
-            note("buffer storage could not be mapped (gl error 0x%x)", glGetError());
-            glBindBuffer(GL_TEXTURE_BUFFER, 0);
-            return false;
-        }
-    }
-    glBindBuffer(GL_TEXTURE_BUFFER, 0);
-    const GLenum error = glGetError();
-    if (error != GL_NO_ERROR)
-    {
-        note("buffer route set-up failed (gl error 0x%x)", error);
-        return false;
-    }
-    buffers_sized_ = true;
-    return true;
-}
-
-void Player::copy_to_buffers(const void *picture)
-{
-    const auto *frame = static_cast<const AVFrame *>(picture);
-    slot_ = (slot_ + 1) % kSlots;
-    for (int plane = 0; plane < 3; ++plane)
-    {
-        unsigned char *to = slots_[slot_].memory + plane_offset_[plane];
-        const std::size_t row = static_cast<std::size_t>(plane_width_[plane]) * bytes_;
-        const unsigned char *from = frame->data[plane];
-        if (static_cast<std::size_t>(frame->linesize[plane]) == row)
-        {
-            std::memcpy(to, from, row * plane_height_[plane]);
-            continue;
-        }
-        for (int y = 0; y < plane_height_[plane]; ++y, to += row, from += frame->linesize[plane])
-            std::memcpy(to, from, row);
-    }
-}
-
-// Draws the picture last uploaded by one route, fitted to the screen with its own shape
-// kept: bars above and below, or at the sides.
-void Player::draw_picture(bool buffers, int width, int height)
-{
-    const float screen_aspect = static_cast<float>(width) / static_cast<float>(height);
-    int shown_width = width, shown_height = height;
-    if (picture_aspect_ > screen_aspect)
-        shown_height = static_cast<int>(static_cast<float>(width) / picture_aspect_ + 0.5f);
+    glBindTexture(GL_TEXTURE_2D, sheet_);
+    if (!sheet_sized_)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, sheet_width_, sheet_height_, 0, GL_RED,
+                     GL_UNSIGNED_SHORT, packed_.data());
     else
-        shown_width = static_cast<int>(static_cast<float>(height) * picture_aspect_ + 0.5f);
-    glViewport((width - shown_width) / 2, (height - shown_height) / 2, shown_width, shown_height);
-    glDisable(GL_BLEND);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_CULL_FACE);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glUseProgram(buffers ? buffer_program_ : texture_program_);
-    const GLenum kind = buffers ? GL_TEXTURE_BUFFER : GL_TEXTURE_2D;
-    for (int plane = 2; plane >= 0; --plane)
-    {
-        glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(plane));
-        glBindTexture(kind, buffers ? slots_[slot_].textures[plane] : planes_[plane]);
-    }
-    glBindVertexArray(vertex_array_);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindVertexArray(0);
-    for (int plane = 2; plane >= 0; --plane)
-    {
-        glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(plane));
-        glBindTexture(kind, 0);
-    }
-    glUseProgram(0);
-    glViewport(0, 0, width, height);
-}
-
-// Gets a new picture to the graphics card. The first bright picture of each kind (8 bit,
-// more than 8 bit) is sent by both routes and what each draws is compared: the buffer
-// route is used from then on if it draws the same, since it costs no driver call.
-void Player::show(const void *picture, int width, int height)
-{
-    const auto *frame = static_cast<const AVFrame *>(picture);
-    if (!describe(frame))
-    {
-        if (!has_picture_)
-            session_->fail(std::string{"Pictures in the "} +
-                           av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)) +
-                           " layout are not supported yet.");
-        return;
-    }
-    Route &route = route_[bytes_ - 1];
-    // Buffer textures stop at about a million samples on this console, far short of a
-    // picture, so the buffer route is only tried where a picture fits.
-    if (route != Route::Textures && !buffers_sized_ && !create_buffers())
-        route = Route::Textures;
-    const double before = now_seconds();
-    if (route == Route::Buffers)
-    {
-        copy_to_buffers(frame);
-        shown_from_buffers_ = true;
-    }
-    else
-    {
-        upload_textures(frame);
-        shown_from_buffers_ = false;
-    }
-    const double after = now_seconds();
-    if (after - before > 0.008 && after - slow_logged_ > 5.0)
-    {
-        slow_logged_ = after;
-        note("sending a picture took %.1f ms by %s (%lu skipped so far)", (after - before) * 1e3,
-             route == Route::Buffers ? "buffers" : "textures", skipped_);
-    }
-    has_picture_ = true;
-    if (route != Route::Untested)
-        return;
-
-    // The comparison: a small block from the middle of what each route draws.
-    constexpr int kBlock = 16;
-    unsigned char by_textures[kBlock * kBlock * 4] = {}, by_buffers[kBlock * kBlock * 4] = {};
-    draw_picture(false, width, height);
-    glReadPixels(width / 2 - kBlock / 2, height / 2 - kBlock / 2, kBlock, kBlock, GL_RGBA,
-                 GL_UNSIGNED_BYTE, by_textures);
-    long brightness = 0;
-    for (int index = 0; index < kBlock * kBlock * 4; index += 4)
-        brightness += by_textures[index] + by_textures[index + 1] + by_textures[index + 2];
-    if (brightness / (kBlock * kBlock * 3) < 24)
-        return; // too dark to tell anything; a later picture decides
-    const double copy_start = now_seconds();
-    copy_to_buffers(frame);
-    const double copy_time = now_seconds() - copy_start;
-    draw_picture(true, width, height);
-    glReadPixels(width / 2 - kBlock / 2, height / 2 - kBlock / 2, kBlock, kBlock, GL_RGBA,
-                 GL_UNSIGNED_BYTE, by_buffers);
-    long difference = 0;
-    for (int index = 0; index < kBlock * kBlock * 4; ++index)
-        difference += std::abs(static_cast<int>(by_textures[index]) - static_cast<int>(by_buffers[index]));
-    const long average = difference / (kBlock * kBlock * 4);
-    route = average < 10 && glGetError() == GL_NO_ERROR ? Route::Buffers : Route::Textures;
-    shown_from_buffers_ = route == Route::Buffers;
-    note("%d-byte pictures go by %s (routes differ by %ld; a buffer copy took %.1f ms, the upload %.1f ms)",
-         bytes_, route == Route::Buffers ? "buffers" : "textures", average, copy_time * 1e3,
-         (after - before) * 1e3);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, sheet_width_, sheet_height_, GL_RED,
+                        GL_UNSIGNED_SHORT, packed_.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    sheet_sized_ = true;
 }
 
 void Player::draw(int width, int height)
 {
     if (session_ == nullptr)
         return;
-    if (texture_program_ == 0 && !create_programs())
+    if (program_ == 0 && !create_program())
         return;
 
     // The newest picture whose time has come; older ones that were never shown are skipped.
@@ -1965,10 +1748,56 @@ void Player::draw(int width, int height)
     }
     if (due != nullptr)
     {
-        show(due, width, height);
+        if (describe(due))
+        {
+            const double before = now_seconds();
+            upload(due);
+            const double after = now_seconds();
+            has_picture_ = true;
+            ++shown_;
+            // Every so often the log gets how sending pictures is going.
+            longest_ = std::max(longest_, after - before);
+            if (after - reported_ > 20.0)
+            {
+                note("pictures: %lu shown, %lu skipped, longest upload %.1f ms", shown_, skipped_,
+                     longest_ * 1e3);
+                reported_ = after;
+                longest_ = 0;
+            }
+        }
+        else if (!has_picture_)
+        {
+            session_->fail(std::string{"Pictures in the "} +
+                           av_get_pix_fmt_name(static_cast<AVPixelFormat>(due->format)) +
+                           " layout are not supported yet.");
+        }
         av_frame_free(&due);
     }
-    if (has_picture_)
-        draw_picture(shown_from_buffers_, width, height);
+    if (!has_picture_)
+        return;
+
+    // Fitted to the screen with its own shape kept: bars above and below, or at the sides.
+    const float screen_aspect = static_cast<float>(width) / static_cast<float>(height);
+    int shown_width = width, shown_height = height;
+    if (picture_aspect_ > screen_aspect)
+        shown_height = static_cast<int>(static_cast<float>(width) / picture_aspect_ + 0.5f);
+    else
+        shown_width = static_cast<int>(static_cast<float>(height) * picture_aspect_ + 0.5f);
+    glViewport((width - shown_width) / 2, (height - shown_height) / 2, shown_width, shown_height);
+    glDisable(GL_BLEND);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glUseProgram(program_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sheet_);
+    glBindVertexArray(vertex_array_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    glViewport(0, 0, width, height);
 }
 } // namespace ps5

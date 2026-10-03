@@ -24,10 +24,8 @@ constexpr float kButton = units(2.9f); // a button's diameter
 constexpr float kButtonPitch = kButton + units(0.9f);
 // Seconds the controls stay up after the last press while a video plays.
 constexpr float kControlsStay = 4.0f;
-// Seconds after the last scrub press before the video jumps to the marker, and before a
-// picture of the marker's moment is asked for.
+// Seconds after the last scrub press before the video jumps to the marker.
 constexpr float kScrubSettle = 0.9f;
-constexpr float kPreviewSettle = 0.12f;
 // Seconds the back and forward buttons, and one scrub press, move by.
 constexpr double kSkip = 15.0;
 constexpr float kPi = 3.14159265f;
@@ -233,6 +231,9 @@ bool PlayerScreen::press(Button button)
         scrub_target_ = std::clamp(scrub_target_ + (button == Button::Right ? step : -step), 0.0,
                                    std::max(0.0, playback_.duration - 1.0));
         scrub_idle_ = 0;
+        // The host shows the picture it has for the marker's moment.
+        if (handler_.preview)
+            handler_.preview(scrub_target_);
         break;
     }
     default:
@@ -247,14 +248,7 @@ void PlayerScreen::update(float seconds)
     spin_ += seconds * 5.0f;
     if (scrubbing_)
     {
-        const float before = scrub_idle_;
         scrub_idle_ += seconds;
-        if (before < kPreviewSettle && scrub_idle_ >= kPreviewSettle && handler_.preview &&
-            scrub_target_ != preview_asked_)
-        {
-            preview_asked_ = scrub_target_;
-            handler_.preview(scrub_target_);
-        }
         if (scrub_idle_ >= kScrubSettle)
             commit_scrub();
     }
@@ -413,8 +407,7 @@ void PlayerScreen::draw_scrub_preview(float thumb_x, float bar_top, float alpha)
     const float top = bar_top - units(2.6f) - height;
     // The picture on hand is shown while it is of a moment near the marker's; a newer one
     // replaces it when it arrives.
-    const bool pictured = playback_.preview_image != 0 &&
-                          std::abs(playback_.preview_time - scrub_target_) < 120.0;
+    const bool pictured = playback_.preview_image != 0;
     float label_middle = bar_top - units(2.3f);
     if (pictured)
     {
