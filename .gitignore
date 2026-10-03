@@ -8,3 +8,7 @@
 **/bridge.js
 **/worker.js
 **/stremio_core_web_bg.wasm
+# Internal planning notes and local build output
+PLAN.md
+/.local/
+/build/
