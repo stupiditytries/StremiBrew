@@ -28,6 +28,7 @@
 #include "core_link.hpp"
 #include "details_data.hpp"
 #include "pad.hpp"
+#include "sounds.hpp"
 #include "theme.hpp"
 
 extern "C"
@@ -359,6 +360,12 @@ int main()
             log_line("image folder: removed %zu old files", trimmed);
         });
     }
+
+    ps5::Sounds sounds;
+    const bool sounds_ready = sounds.start();
+    log_line("sound effects %s", sounds_ready ? "ready" : "not available");
+    if (sounds_ready)
+        app.set_sound_handler([&sounds](ui::Sound sound) { sounds.play(sound); });
 
     ps5::Pad pad;
     log_line("controller %s", pad.open() ? "ready" : "not available");

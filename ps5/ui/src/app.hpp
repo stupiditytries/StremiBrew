@@ -30,6 +30,14 @@ enum class Button
     Back,
 };
 
+// Sound effects the host plays as the user gets about.
+enum class Sound
+{
+    Move,   // the focus moved
+    Select, // something was chosen
+    Back,   // stepped back out of something
+};
+
 // Things the user asks for that the host carries out.
 enum class Intent
 {
@@ -72,6 +80,7 @@ class App
         return title_open_ || veil_rising_;
     }
     void set_intent_handler(std::function<void(Intent)> handler);
+    void set_sound_handler(std::function<void(Sound)> handler);
     // The catalog (by its position among all of the board's catalogs) of the row the
     // focus is on, so the host can load rows ahead of it.
     std::size_t focused_catalog() const
@@ -104,6 +113,9 @@ class App
     float row_top(std::size_t index) const;
     void follow_focus();
     void enter_tab();
+    void apply(Button button);
+    // A number that changes whenever a press moves the focus or changes the screen.
+    std::size_t focus_mark() const;
     void draw_settings();
     void draw_unbuilt_tab();
 
@@ -122,6 +134,7 @@ class App
     Details pending_known_;
     std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
+    std::function<void(Sound)> sound_;
 
     Zone zone_ = Zone::Rows;
     int navigation_focus_ = 0; // which navigation button the focus is on

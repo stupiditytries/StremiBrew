@@ -682,7 +682,11 @@ static int glnvg__renderCreate(void* uptr)
 		"		if (texType == 1) color = vec4(color.xyz*color.w,color.w);"
 		"		if (texType == 2) color = vec4(color.x);"
 		"		color *= scissor;\n"
-		"		result = color * innerCol;\n"
+		"		// Text takes a gradient paint like any fill (a plain colour is a gradient\n"
+		"		// whose two colours are the same).\n"
+		"		vec2 pt = (paintMat * vec3(fpos,1.0)).xy;\n"
+		"		float d = clamp((sdroundrect(pt, extent, radius) + feather*0.5) / feather, 0.0, 1.0);\n"
+		"		result = color * mix(innerCol,outerCol,d);\n"
 		"	}\n"
 		"#ifdef NANOVG_GL3\n"
 		"	outColor = result;\n"
@@ -966,6 +970,9 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 			nvgTransformInverse(invxform, paint->xform);
 		}
 		frag->type = NSVG_SHADER_FILLIMG;
+		// Text is drawn through here and takes its paint's gradient.
+		frag->radius = paint->radius;
+		frag->feather = paint->feather > 0.0f ? paint->feather : 1.0f;
 
 		#if NANOVG_GL_USE_UNIFORMBUFFER
 		if (tex->type == NVG_TEXTURE_RGBA)

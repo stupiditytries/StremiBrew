@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "details_data.hpp"
@@ -53,6 +54,8 @@ class DetailsScreen
     void open(const std::string &type, const std::string &id, const std::string &name);
     void set_details(Details details);
     void press(Button button);
+    // A number that changes whenever a press moves the focus or leaves the page.
+    std::size_t focus_mark() const;
     void update(float seconds);
     void draw();
 
@@ -79,7 +82,19 @@ class DetailsScreen
     void draw_episodes();
     void draw_streams();
     void draw_backdrop(float alpha);
-    void draw_stream(const Stream &stream, float x, float y, float width, bool focused);
+    // What a stream's card says, worked out once when the streams arrive.
+    struct StreamText
+    {
+        std::string name;        // who offers it
+        std::string under;       // the smaller text under that
+        std::string description; // what it is
+        std::string reason;      // why it cannot be played, when it cannot
+    };
+    void describe_streams();
+    // `fade_from` and `fade_to` are the heights between which the card fades to nothing
+    // (at a list edge); equal when it does not.
+    void draw_stream(const Stream &stream, const StreamText &text, float x, float y, float width,
+                     bool focused, float fade_from, float fade_to);
     std::string playing_title(const Episode *episode) const;
 
     NVGcontext *vg_;
@@ -99,6 +114,15 @@ class DetailsScreen
     float appear_ = 0;    // 0..1, how far the page has opened
     bool closing_ = false; // running the opening backwards before telling the owner
     float streams_ = 0;   // 0..1, how far the stream list has slid in
+    std::vector<StreamText> stream_text_; // one per stream
+    // Arriving streams fade in one after another: how many cards down the list that has
+    // got. The "asking" line fades too, at the place in the list where it was last needed.
+    float list_fill_ = 0;
+    // How far each episode still has faded in since it arrived, by its address.
+    std::unordered_map<std::string, float> still_shown_;
+    float frame_seconds_ = 0; // the last update's time step, for fades advanced while drawing
+    float asking_alpha_ = 0;
+    std::size_t asking_slot_ = 0;
     // The episode whose name and summary are on screen. It trails the focus: the text
     // fades out, switches, and fades in.
     Episode about_;

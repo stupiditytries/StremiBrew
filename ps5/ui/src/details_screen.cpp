@@ -29,6 +29,8 @@ constexpr float kTilesTop = kScreenHeight - kTileHeight - kTileLabel - units(1.6
 constexpr float kSeasonHeight = units(2.6f);
 constexpr float kSeasonsTop = kTilesTop - kSeasonHeight - units(1.3f);
 constexpr float kSeasonGap = units(0.6f);
+// Season buttons are a little squarer than cards.
+constexpr float kSeasonRadius = kRadius * 0.65f;
 // Where the backdrop starts darkening towards a series' episode row.
 constexpr float kLowerShadeTop = kSeasonsTop - units(14.0f);
 // How much of each end of the stream list fades away.
@@ -38,6 +40,13 @@ constexpr float kListEdge = units(1.8f);
 constexpr float kOpenTime = 0.24f;
 constexpr float kTextOut = 0.09f;
 constexpr float kTextIn = 0.20f;
+// Arriving streams: cards started per second, how many are part-way in at once, and the
+// seconds the "asking" line takes to come or go.
+constexpr float kFillRate = 16.0f;
+constexpr float kFillSpread = 3.0f;
+constexpr float kAskingFade = 0.22f;
+// Seconds an episode's still takes to fade in once it has loaded.
+constexpr float kStillFade = 0.30f;
 
 // Starts fast and settles: for things arriving at their place.
 float settle(float progress)
@@ -124,6 +133,30 @@ void DetailsScreen::open(const std::string &type, const std::string &id, const s
     about_alpha_ = 0;
     tiles_alpha_ = 1;
     tiles_shift_ = 0;
+    stream_text_.clear();
+    list_fill_ = 0;
+    asking_alpha_ = 0;
+    asking_slot_ = 0;
+    still_shown_.clear();
+}
+
+// Works out what each stream's card says, so drawing a card is only drawing.
+void DetailsScreen::describe_streams()
+{
+    stream_text_.clear();
+    stream_text_.reserve(details_.streams.size());
+    for (const Stream &stream : details_.streams)
+    {
+        StreamText text;
+        const auto [name, rest] = first_line(drawable(stream.name));
+        text.name = name.empty() ? stream.addon : name;
+        text.under = rest.empty() ? stream.addon : rest;
+        text.description = drawable(stream.description);
+        std::replace(text.description.begin(), text.description.end(), '\n', ' ');
+        if (stream.url.empty())
+            text.reason = "Cannot be played here: " + stream.unsupported;
+        stream_text_.push_back(std::move(text));
+    }
 }
 
 void DetailsScreen::set_details(Details details)
@@ -144,6 +177,14 @@ void DetailsScreen::set_details(Details details)
     episode_focus_ = std::min(episode_focus_, episodes == 0 ? 0 : episodes - 1);
     stream_focus_ =
         std::min(stream_focus_, details_.streams.empty() ? 0 : details_.streams.size() - 1);
+    describe_streams();
+    // While add-ons are still being asked, the line saying so sits under the streams so
+    // far; when it has to move, it fades in afresh at its new place.
+    if (details_.streams_loading > 0 && asking_slot_ != details_.streams.size())
+    {
+        asking_slot_ = details_.streams.size();
+        asking_alpha_ = 0;
+    }
 }
 
 bool DetailsScreen::is_series() const
@@ -272,6 +313,10 @@ void DetailsScreen::press(Button button)
             chosen_id_ = episodes[episode_focus_]->id;
             details_.streams.clear();
             details_.streams_loading = 1;
+            stream_text_.clear();
+            list_fill_ = 0;
+            asking_alpha_ = 0;
+            asking_slot_ = 0;
             zone_ = Zone::Streams;
             stream_focus_ = 0;
             streams_scroll_ = streams_scroll_target_ = 0;
@@ -302,14 +347,30 @@ void DetailsScreen::press(Button button)
     follow_focus();
 }
 
+std::size_t DetailsScreen::focus_mark() const
+{
+    return ((((static_cast<std::size_t>(zone_) * 131u + static_cast<std::size_t>(season_)) * 131u +
+              episode_focus_) * 131u + stream_focus_) << 1) | (closing_ ? 1u : 0u);
+}
+
 void DetailsScreen::update(float seconds)
 {
+    frame_seconds_ = seconds;
     episodes_scroll_ = eased(episodes_scroll_, episodes_scroll_target_, seconds);
     seasons_scroll_ = eased(seasons_scroll_, seasons_scroll_target_, seconds);
     streams_scroll_ = eased(streams_scroll_, streams_scroll_target_, seconds);
     streams_ = eased(streams_, zone_ == Zone::Streams ? 1.0f : 0.0f, seconds);
     tiles_alpha_ = std::min(1.0f, tiles_alpha_ + seconds / 0.22f);
     tiles_shift_ = eased(tiles_shift_, 0.0f, seconds);
+    {
+        // A long list is not made to wait: the further behind, the faster it fills.
+        const float full = static_cast<float>(details_.streams.size()) + kFillSpread;
+        const float rate = std::max(kFillRate, (full - list_fill_) * 4.0f);
+        list_fill_ = std::min(full, list_fill_ + rate * seconds);
+        const float step = seconds / kAskingFade;
+        asking_alpha_ = details_.streams_loading > 0 ? std::min(1.0f, asking_alpha_ + step)
+                                                     : std::max(0.0f, asking_alpha_ - step);
+    }
 
     if (closing_)
     {
@@ -441,8 +502,8 @@ void DetailsScreen::draw_film_about(float top)
 void DetailsScreen::draw_episode_about(float top, const Episode &episode)
 {
     const float fade = settle(appear_) * about_alpha_;
-    // Under the title's facts, rising a little into place as it fades in.
-    top += units(0.4f) + (1.0f - about_alpha_) * units(0.6f);
+    // Under the title's facts, settling very slightly into place as it fades in.
+    top += units(0.4f) + (1.0f - about_alpha_) * units(0.15f);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(0.95f));
@@ -498,11 +559,11 @@ void DetailsScreen::draw_seasons()
         }
         const float y = kSeasonsTop + rise;
         nvgBeginPath(vg_);
-        nvgRoundedRect(vg_, x, y, width, kSeasonHeight, kRadius);
+        nvgRoundedRect(vg_, x, y, width, kSeasonHeight, kSeasonRadius);
         nvgFillColor(vg_, selected ? accent(shown) : overlay(2.4f * shown));
         nvgFill(vg_);
         if (focused)
-            focus_ring(vg_, x, y, width, kSeasonHeight, kRadius);
+            focus_ring(vg_, x, y, width, kSeasonHeight, kSeasonRadius);
         nvgFillColor(vg_, foreground((selected ? 1.0f : 0.75f) * shown));
         nvgText(vg_, x + width / 2, y + kSeasonHeight / 2, name.c_str(), nullptr);
         x += width + kSeasonGap;
@@ -549,17 +610,22 @@ void DetailsScreen::draw_episodes()
         }
         const float alpha = shown * (is_chosen ? 1.0f : dim);
         const Images::Texture still = images_.get(episode.thumbnail, kStillPixels);
-        if (still.state == Images::State::Ready)
-        {
-            cover_image(vg_, x, y, w, h, kRadius, still, alpha);
-        }
-        else
+        const bool ready = still.state == Images::State::Ready;
+        // A still that arrives while its tile is on screen fades in over the tile's plain
+        // face; one that was already there the first time it was wanted is simply shown.
+        const auto [entry, fresh] = still_shown_.try_emplace(episode.thumbnail, ready ? 1.0f : 0.0f);
+        float &arrived = entry->second;
+        if (ready && !fresh)
+            arrived = std::min(1.0f, arrived + frame_seconds_ / kStillFade);
+        if (arrived < 1.0f)
         {
             nvgBeginPath(vg_);
             nvgRoundedRect(vg_, x, y, w, h, kRadius);
             nvgFillColor(vg_, overlay(2.0f * alpha));
             nvgFill(vg_);
         }
+        if (ready)
+            cover_image(vg_, x, y, w, h, kRadius, still, alpha * arrived);
         // The episode's number over the still's lower left corner.
         nvgFontFace(vg_, "bold");
         nvgFontSize(vg_, units(1.0f));
@@ -591,47 +657,69 @@ void DetailsScreen::draw_episodes()
         draw_tile(focused);
 }
 
-void DetailsScreen::draw_stream(const Stream &stream, float x, float y, float width, bool focused)
+void DetailsScreen::draw_stream(const Stream &stream, const StreamText &text, float x, float y,
+                                float width, bool focused, float fade_from, float fade_to)
 {
+    // At a list edge everything on the card is painted with a gradient that runs out to
+    // nothing, so the card dissolves there in a single pass.
+    const auto ink = [&](NVGcolor color) {
+        return nvgLinearGradient(vg_, x, fade_from, x, fade_to, color,
+                                 nvgRGBAf(color.r, color.g, color.b, 0.0f));
+    };
+    const bool fading = fade_from != fade_to;
+    const auto fill = [&](NVGcolor color) {
+        if (fading)
+            nvgFillPaint(vg_, ink(color));
+        else
+            nvgFillColor(vg_, color);
+    };
+
     const bool playable = !stream.url.empty();
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, x, y, width, kStreamHeight, kRadius);
-    nvgFillColor(vg_, focused ? nvgRGBAf(0.16f, 0.16f, 0.18f, 0.95f) : nvgRGBAf(0.07f, 0.07f, 0.08f, 0.88f));
+    fill(focused ? nvgRGBAf(0.16f, 0.16f, 0.18f, 0.95f) : nvgRGBAf(0.07f, 0.07f, 0.08f, 0.88f));
     nvgFill(vg_);
-    if (focused)
+    if (focused && !fading)
+    {
         focus_ring(vg_, x, y, width, kStreamHeight, kRadius);
+    }
+    else if (focused)
+    {
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, x - kFocusOutline / 2, y - kFocusOutline / 2, width + kFocusOutline,
+                       kStreamHeight + kFocusOutline, kRadius + kFocusOutline / 2);
+        nvgStrokePaint(vg_, ink(foreground(1.0f)));
+        nvgStrokeWidth(vg_, kFocusOutline);
+        nvgStroke(vg_);
+    }
     const float dim = playable ? 1.0f : 0.45f;
 
     // Left: who offers it (the stream's own name, and the add-on under it).
     const float name_width = units(10.5f);
-    const auto [name, name_rest] = first_line(drawable(stream.name));
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFontFace(vg_, "semibold");
     nvgFontSize(vg_, units(1.0f));
-    nvgFillColor(vg_, foreground(dim));
-    fitted_text(vg_, x + kRowPadding, y + kRowPadding, name_width, name.empty() ? stream.addon : name);
+    fill(foreground(dim));
+    fitted_text(vg_, x + kRowPadding, y + kRowPadding, name_width, text.name);
     nvgFontFace(vg_, "regular");
     nvgFontSize(vg_, units(0.85f));
-    nvgFillColor(vg_, foreground(0.6f * dim));
+    fill(foreground(0.6f * dim));
     wrapped_text(vg_, x + kRowPadding, y + kRowPadding + units(1.5f), name_width,
-                 units(0.85f) * 1.4f, 2, name_rest.empty() ? stream.addon : name_rest);
+                 units(0.85f) * 1.4f, 2, text.under);
 
     // Right: what it is.
     const float text_x = x + kRowPadding + name_width + units(1.0f);
     const float text_width = x + width - kRowPadding - text_x;
-    std::string description = drawable(stream.description);
-    std::replace(description.begin(), description.end(), '\n', ' ');
     nvgFontSize(vg_, units(0.9f));
-    nvgFillColor(vg_, foreground(0.8f * dim));
+    fill(foreground(0.8f * dim));
     const float used = wrapped_text(vg_, text_x, y + kRowPadding, text_width, units(0.9f) * 1.4f,
-                                    playable ? 3 : 2, description);
+                                    playable ? 3 : 2, text.description);
     if (!playable)
     {
         nvgFontFace(vg_, "medium");
         nvgFontSize(vg_, units(0.85f));
-        nvgFillColor(vg_, foreground(0.5f));
-        const std::string reason = "Cannot be played here: " + stream.unsupported;
-        nvgText(vg_, text_x, y + kRowPadding + used + units(0.2f), reason.c_str(), nullptr);
+        fill(foreground(0.5f));
+        nvgText(vg_, text_x, y + kRowPadding + used + units(0.2f), text.reason.c_str(), nullptr);
     }
 }
 
@@ -653,67 +741,67 @@ void DetailsScreen::draw_streams()
 
     nvgSave(vg_);
     // A series' list stops above its episode row; a film's runs to the bottom. Each end of
-    // the list has a short edge in which cards fade away; the top one only once the list
-    // has been scrolled.
-    constexpr int kEdgeBands = 14;
+    // the list has a short edge in which cards fade away, and are gone before the square
+    // cut that ends them; the top one only once the list has been scrolled.
     const float bottom = is_series() ? kSeasonsTop - units(0.6f) : kListBottom;
     const float list_top = kListTop - units(0.4f);
-    const float clip_x = x - units(0.5f), clip_width = kListWidth + units(1.0f);
     const float solid_bottom = bottom - kListEdge;
     const float solid_top =
         list_top + kListEdge * std::clamp(streams_scroll_ / units(1.0f), 0.0f, 1.0f);
-    float y = kListTop - streams_scroll_;
-    for (std::size_t index = 0; index < details_.streams.size(); ++index)
+    constexpr float kGoneBy = 0.75f; // how far into an edge a card has faded out entirely
+    nvgScissor(vg_, x - units(0.5f), list_top, kListWidth + units(1.0f), bottom - list_top);
+    const float pitch = kStreamHeight + kStreamGap;
+    const std::size_t count = std::min(details_.streams.size(), stream_text_.size());
+    for (std::size_t index = 0; index < count; ++index)
     {
-        if (y + kStreamHeight > list_top && y < bottom)
+        // Each card fades in and rises into place a little after the one above it.
+        const float arrived =
+            settle((list_fill_ - static_cast<float>(index)) / kFillSpread);
+        const float y = kListTop - streams_scroll_ + static_cast<float>(index) * pitch +
+                        (1.0f - arrived) * units(0.9f);
+        if (arrived <= 0 || y + kStreamHeight + kFocusOutline < list_top)
+            continue;
+        if (y - kFocusOutline > bottom)
+            break;
+        float fade_from = 0, fade_to = 0;
+        if (y + kStreamHeight + kFocusOutline > solid_bottom)
         {
-            const bool focused = zone_ == Zone::Streams && index == stream_focus_;
-            const Stream &stream = details_.streams[index];
-            // The part of the card between the two edges is drawn as it is.
-            nvgScissor(vg_, clip_x, solid_top, clip_width, solid_bottom - solid_top);
-            nvgGlobalAlpha(vg_, shown);
-            draw_stream(stream, x, y, kListWidth, focused);
-            // The part inside an edge is drawn band by band, each fainter than the last,
-            // down to nothing at the list's very end: the card dissolves there, so the
-            // square cut that ends it is never seen.
-            const auto edge = [&](bool lower) {
-                const float from = lower ? solid_bottom : list_top;
-                const float span = lower ? bottom - solid_bottom : solid_top - list_top;
-                if (span <= 0 || y + kStreamHeight + kFocusOutline < from || y - kFocusOutline > from + span)
-                    return;
-                const float band = span / kEdgeBands;
-                for (int step = 0; step < kEdgeBands; ++step)
-                {
-                    // 1 next to the solid part, 0 at the list's end; squared, so the card
-                    // is mostly gone well before the end.
-                    const float near = lower ? 1.0f - (step + 0.5f) / kEdgeBands : (step + 0.5f) / kEdgeBands;
-                    nvgScissor(vg_, clip_x, from + step * band, clip_width, band + 0.5f);
-                    nvgGlobalAlpha(vg_, shown * near * near);
-                    draw_stream(stream, x, y, kListWidth, focused);
-                }
-            };
-            edge(true);
-            edge(false);
+            fade_from = solid_bottom;
+            fade_to = solid_bottom + (bottom - solid_bottom) * kGoneBy;
         }
-        y += kStreamHeight + kStreamGap;
+        else if (y - kFocusOutline < solid_top)
+        {
+            fade_from = solid_top;
+            fade_to = solid_top - (solid_top - list_top) * kGoneBy;
+        }
+        nvgGlobalAlpha(vg_, shown * arrived);
+        draw_stream(details_.streams[index], stream_text_[index], x, y, kListWidth,
+                    zone_ == Zone::Streams && index == stream_focus_, fade_from, fade_to);
     }
-    nvgScissor(vg_, clip_x, list_top, clip_width, bottom - list_top);
-    nvgGlobalAlpha(vg_, shown);
-    // Under the streams so far (or instead of them): whether more are on their way.
+
+    // Whether more streams are on their way: said where the next ones will appear, and
+    // faded out there as they do.
     nvgFontFace(vg_, "regular");
     nvgFontSize(vg_, units(1.05f));
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFillColor(vg_, foreground(0.7f));
-    if (details_.streams_loading > 0)
-        nvgText(vg_, x, y + units(0.3f), "Asking add-ons for streams", nullptr);
-    else if (details_.streams.empty())
-        nvgTextBox(vg_, x, y + units(0.3f), kListWidth,
+    const float note_y = kListTop - streams_scroll_ + units(0.3f);
+    if (asking_alpha_ > 0.01f)
+    {
+        nvgGlobalAlpha(vg_, shown * asking_alpha_);
+        nvgText(vg_, x, note_y + static_cast<float>(asking_slot_) * pitch,
+                "Asking add-ons for streams", nullptr);
+    }
+    if (details_.streams.empty() && details_.streams_loading == 0)
+    {
+        nvgGlobalAlpha(vg_, shown * (1.0f - asking_alpha_));
+        nvgTextBox(vg_, x, note_y, kListWidth,
                    "No add-on offered a stream for this. Streams come from the add-ons "
                    "installed on your Stremio account.",
                    nullptr);
+    }
     nvgRestore(vg_);
     nvgGlobalAlpha(vg_, 1.0f);
-
 }
 
 // The page's backdrop: the title's artwork, softened, under a grey wash, so it sets the

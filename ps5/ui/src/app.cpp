@@ -185,7 +185,40 @@ void App::follow_focus()
         target = left + width - visible;
 }
 
+void App::set_sound_handler(std::function<void(Sound)> handler)
+{
+    sound_ = std::move(handler);
+}
+
+std::size_t App::focus_mark() const
+{
+    std::size_t mark = static_cast<std::size_t>(zone_);
+    const auto add = [&mark](std::size_t value) { mark = mark * 1000003u + value; };
+    add(static_cast<std::size_t>(navigation_focus_));
+    add(static_cast<std::size_t>(selected_tab_));
+    add(row_focus_);
+    add(row_focus_ < column_focus_.size() ? column_focus_[row_focus_] : 0);
+    add(title_open_);
+    add(veil_rising_);
+    add(title_open_ ? details_->focus_mark() : 0);
+    return mark;
+}
+
 void App::press(Button button)
+{
+    const std::size_t before = focus_mark();
+    apply(button);
+    if (!sound_)
+        return;
+    // A press that got nowhere (the end of a row, say) is silent.
+    const bool changed = focus_mark() != before;
+    if (button == Button::Accept)
+        sound_(Sound::Select);
+    else if (changed)
+        sound_(button == Button::Back ? Sound::Back : Sound::Move);
+}
+
+void App::apply(Button button)
 {
     if (title_open_)
     {

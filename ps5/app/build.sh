@@ -112,7 +112,7 @@ cp "$sdk"/target/lib/*.so "$GL_SDK/lib/libSceAgc.so" "$GL_SDK/lib/libSceAgcDrive
     "$sdk/target/lib/libSceLibcInternal.so" "$sdk/target/lib/libkernel.so" \
     "$sdk/target/lib/libSceVideoOut.so" "$sdk/target/lib/libSceSystemService.so" \
     "$sdk/target/lib/libSceUserService.so" "$sdk/target/lib/libScePad.so" \
-    "$sdk/target/lib/libSceNet.so" "$sdk/target/lib/libc.a"
+    "$sdk/target/lib/libSceNet.so" "$sdk/target/lib/libSceAudioOut.so" "$sdk/target/lib/libc.a"
 
 # Every import must come from a module a game process loads.
 if readelf -d "$out/llvm-pie.elf" | grep -E 'NEEDED.*lib(ScePosixForWebKit|SceRandom|kernel_sys|kernel_web)'; then
