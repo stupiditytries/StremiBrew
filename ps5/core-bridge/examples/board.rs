@@ -1,14 +1,14 @@
 //! Runs the bridge on the PC through its C interface: starts the core, loads the board and
 //! prints what arrived.
 //!
-//!   cargo run --release --example board -- <storage folder>
+//!   cargo run --release --example board -- <storage folder> [board JSON output file]
 
 use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use stremio_core_ps5::{
-    stremio_core_board_summary, stremio_core_init, stremio_core_last_error,
-    stremio_core_load_board, stremio_core_poll_event,
+    stremio_core_board_rows, stremio_core_board_summary, stremio_core_init,
+    stremio_core_last_error, stremio_core_load_board, stremio_core_poll_event,
 };
 
 fn text(fill: impl Fn(*mut std::ffi::c_char, usize) -> usize) -> String {
@@ -38,6 +38,14 @@ fn main() {
             || start.elapsed() > Duration::from_secs(30)
         {
             println!("{events} events in {:.1} s\n{summary}", start.elapsed().as_secs_f32());
+            // The board's rows exactly as the app's UI receives them, for its PC preview.
+            if let Some(output) = std::env::args().nth(2) {
+                let mut buffer = vec![0u8; 4 << 20];
+                let length =
+                    stremio_core_board_rows(20, buffer.as_mut_ptr().cast(), buffer.len());
+                std::fs::write(&output, &buffer[..length.min(buffer.len())]).unwrap();
+                println!("wrote {length} bytes to {output}");
+            }
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
