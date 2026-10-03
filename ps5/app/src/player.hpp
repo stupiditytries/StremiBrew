@@ -102,6 +102,7 @@ class Player
     int format_ = -1, width_ = 0, height_ = 0, bytes_ = 1;
     int plane_width_[3] = {}, plane_height_[3] = {};
     bool textures_sized_ = false;
+    std::vector<std::uint16_t> widened_; // an 8-bit plane as 16-bit samples, for the upload
     // The buffer route: three sets of planes used in turn, so the card is never reading
     // the one being written.
     struct Slot

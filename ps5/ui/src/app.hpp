@@ -157,6 +157,7 @@ class App
     std::unique_ptr<PlayerScreen> player_;
     PlayerHandler player_handler_;
     bool player_open_ = false;
+    float player_leaving_ = 0; // 1..0: the black the player leaves behind, fading away
     // Going between the board and a title's page fades through black, so that the two
     // are never both on screen: 0 is the board, 1 is black.
     float veil_ = 0;

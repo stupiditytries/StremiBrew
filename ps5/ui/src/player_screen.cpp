@@ -444,9 +444,9 @@ void PlayerScreen::draw_subtitle()
 {
     if (playback_.subtitle.empty())
         return;
-    const float size = units(2.1f), line_height = size * 1.3f;
+    const float size = units(2.0f), line_height = size * 1.55f;
     const float width = kScreenWidth * 0.72f;
-    nvgFontFace(vg_, "semibold");
+    nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, size);
     // Each of the subtitle's own lines is wrapped to the width; all are drawn bottom up.
     constexpr int kMost = 8;
@@ -464,16 +464,21 @@ void PlayerScreen::draw_subtitle()
         start = stop + 1;
     }
     const float bottom = kScreenHeight - units(3.6f) - controls_ * units(8.0f);
-    nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_BASELINE);
+    nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    // Each line sits on its own plate of translucent black, as wide as its text.
     for (int row = 0; row < count; ++row)
     {
-        const float y = bottom - static_cast<float>(count - 1 - row) * line_height;
-        // A soft dark edge all round keeps the letters readable over anything.
-        nvgFontBlur(vg_, units(0.22f));
-        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 1));
-        for (int pass = 0; pass < 3; ++pass)
-            nvgText(vg_, kScreenWidth / 2, y + units(0.08f), rows[row].start, rows[row].end);
-        nvgFontBlur(vg_, 0);
+        const float y = bottom - (static_cast<float>(count - 1 - row) + 0.5f) * line_height;
+        const float width = rows[row].width + units(1.6f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, kScreenWidth / 2 - width / 2, y - line_height / 2, width,
+                       line_height + 0.5f, units(0.3f));
+        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 0.62f));
+        nvgFill(vg_);
+    }
+    for (int row = 0; row < count; ++row)
+    {
+        const float y = bottom - (static_cast<float>(count - 1 - row) + 0.5f) * line_height;
         nvgFillColor(vg_, foreground_solid(1.0f));
         nvgText(vg_, kScreenWidth / 2, y, rows[row].start, rows[row].end);
     }

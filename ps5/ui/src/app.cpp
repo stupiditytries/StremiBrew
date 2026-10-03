@@ -241,6 +241,7 @@ void App::change_language(bool subtitles, int step)
 void App::close_player()
 {
     player_open_ = false;
+    player_leaving_ = 1.0f;
     if (player_handler_.close)
         player_handler_.close();
 }
@@ -411,6 +412,8 @@ void App::update(float seconds)
 {
     if (player_open_)
         player_->update(seconds);
+    else
+        player_leaving_ = std::max(0.0f, player_leaving_ - seconds / 0.35f);
     if (title_open_)
         details_->update(seconds);
     constexpr float kVeilTime = 0.12f;
@@ -999,8 +1002,17 @@ void App::draw(int width, int height)
 
     if (title_open_)
     {
-        // A title's page takes the whole screen.
+        // A title's page takes the whole screen. Coming back from the player it fades in
+        // from the black the video left.
         details_->draw();
+        if (player_leaving_ > 0.0f)
+        {
+            const float rest = player_leaving_ * player_leaving_;
+            nvgBeginPath(vg_);
+            nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+            nvgFillColor(vg_, nvgRGBAf(0, 0, 0, rest));
+            nvgFill(vg_);
+        }
         nvgEndFrame(vg_);
         return;
     }

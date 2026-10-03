@@ -1679,22 +1679,40 @@ bool Player::describe(const void *picture)
     return true;
 }
 
+// The planes always go up as 16-bit textures. This console's driver takes some 40 ms over
+// any 8-bit one, whatever its size (which no video's frame rate survives), and a few
+// milliseconds over a 16-bit one, so 8-bit video is widened first. A sample v becomes
+// v * 257, which is the same fraction of the 16-bit range as v is of the 8-bit one, so the
+// colour arithmetic does not change.
 bool Player::upload_textures(const void *picture)
 {
     const auto *frame = static_cast<const AVFrame *>(picture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     for (int plane = 0; plane < 3; ++plane)
     {
+        const int width = plane_width_[plane], height = plane_height_[plane];
+        const void *samples = frame->data[plane];
+        if (bytes_ == 1)
+        {
+            widened_.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+            std::uint16_t *to = widened_.data();
+            const std::uint8_t *from = frame->data[plane];
+            for (int y = 0; y < height; ++y, to += width, from += frame->linesize[plane])
+                for (int x = 0; x < width; ++x)
+                    to[x] = static_cast<std::uint16_t>(from[x] * 257);
+            samples = widened_.data();
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        }
+        else
+        {
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, frame->linesize[plane] / 2);
+        }
         glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(plane));
         glBindTexture(GL_TEXTURE_2D, planes_[plane]);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, frame->linesize[plane] / bytes_);
-        const GLenum type = bytes_ == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
         if (!textures_sized_)
-            glTexImage2D(GL_TEXTURE_2D, 0, bytes_ == 2 ? GL_R16 : GL_R8, plane_width_[plane],
-                         plane_height_[plane], 0, GL_RED, type, frame->data[plane]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, width, height, 0, GL_RED, GL_UNSIGNED_SHORT, samples);
         else
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, plane_width_[plane], plane_height_[plane],
-                            GL_RED, type, frame->data[plane]);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED, GL_UNSIGNED_SHORT, samples);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -1843,6 +1861,8 @@ void Player::show(const void *picture, int width, int height)
         return;
     }
     Route &route = route_[bytes_ - 1];
+    // Buffer textures stop at about a million samples on this console, far short of a
+    // picture, so the buffer route is only tried where a picture fits.
     if (route != Route::Textures && !buffers_sized_ && !create_buffers())
         route = Route::Textures;
     const double before = now_seconds();

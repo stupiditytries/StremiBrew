@@ -4,6 +4,7 @@
 //! reads model state as JSON. All functions may be called from any thread.
 
 mod account;
+mod brief;
 mod details;
 mod env;
 mod model;
@@ -43,6 +44,13 @@ static RUNTIME: OnceLock<Runtime<Ps5Env, Ps5Model>> = OnceLock::new();
 /// Events the core has emitted and the app has not collected yet, as JSON.
 static EVENTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+/// Adds an event of the bridge's own to the ones the app collects.
+pub(crate) fn announce(json: &str) {
+    if let Ok(mut queue) = EVENTS.lock() {
+        queue.push_back(json.to_owned());
+    }
+}
 
 fn set_error(text: impl Into<String>) {
     if let Ok(mut error) = LAST_ERROR.lock() {
@@ -351,14 +359,14 @@ struct BoardItem<'a> {
     name: &'a str,
     poster: Option<std::borrow::Cow<'a, str>>,
     poster_shape: &'a stremio_core::types::resource::PosterShape,
-    release_info: Option<&'a str>,
+    release_info: Option<std::borrow::Cow<'a, str>>,
     // What the featured area at the top of the board shows about the focused item.
     background: Option<std::borrow::Cow<'a, str>>,
     logo: Option<std::borrow::Cow<'a, str>>,
-    description: Option<&'a str>,
-    runtime: Option<&'a str>,
-    imdb_rating: Option<&'a str>,
-    genres: Vec<&'a str>,
+    description: Option<std::borrow::Cow<'a, str>>,
+    runtime: Option<std::borrow::Cow<'a, str>>,
+    imdb_rating: Option<std::borrow::Cow<'a, str>>,
+    genres: Vec<std::borrow::Cow<'a, str>>,
     /// For a title part-way through: how far, in thousandths (a whole number: the
     /// console's C library does not read fractions reliably), and the video it was left in.
     progress: Option<u32>,
@@ -407,19 +415,20 @@ pub extern "C" fn stremio_core_board_rows(
                     format!("https://images.metahub.space/{kind}/medium/{}/img", item.id).into()
                 })
             };
+            let brief = brief::get(&item.r#type, &item.id).unwrap_or_default();
             BoardItem {
                 id: &item.id,
                 r#type: &item.r#type,
                 name: &item.name,
                 poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
                 poster_shape: &item.poster_shape,
-                release_info: None,
+                release_info: brief.release_info.map(Into::into),
                 background: art("background"),
                 logo: art("logo"),
-                description: None,
-                runtime: None,
-                imdb_rating: None,
-                genres: vec![],
+                description: brief.description.map(Into::into),
+                runtime: brief.runtime.map(Into::into),
+                imdb_rating: brief.imdb_rating.map(Into::into),
+                genres: brief.genres.into_iter().map(Into::into).collect(),
                 progress: Some((item.progress() * 10.0).clamp(0.0, 1000.0) as u32),
                 video: item.state.video_id.as_deref(),
             }
@@ -478,21 +487,21 @@ pub extern "C" fn stremio_core_board_rows(
                             name: &item.name,
                             poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
                             poster_shape: shape.unwrap_or(&item.poster_shape),
-                            release_info: item.release_info.as_deref(),
+                            release_info: item.release_info.as_deref().map(Into::into),
                             background: item.background.as_ref().map(|url| url.as_str().into()),
                             logo: item.logo.as_ref().map(|url| url.as_str().into()),
-                            description: item.description.as_deref(),
-                            runtime: item.runtime.as_deref(),
+                            description: item.description.as_deref().map(Into::into),
+                            runtime: item.runtime.as_deref().map(Into::into),
                             imdb_rating: item
                                 .links
                                 .iter()
                                 .find(|link| link.category == IMDB_LINK_CATEGORY)
-                                .map(|link| link.name.as_str()),
+                                .map(|link| link.name.as_str().into()),
                             genres: item
                                 .links
                                 .iter()
                                 .filter(|link| link.category == GENRES_LINK_CATEGORY)
-                                .map(|link| link.name.as_str())
+                                .map(|link| link.name.as_str().into())
                                 .take(3)
                                 .collect(),
                             progress: None,
