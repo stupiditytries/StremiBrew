@@ -46,7 +46,7 @@ includes=(-I"$ui/src" -I"$ui/third_party/nanovg" -I"$ui/third_party"
     -I"$GL_SDK/include" -DGL_GLEXT_PROTOTYPES=1)
 common=(-O2 -ffunction-sections -fdata-sections "${includes[@]}")
 sources=("$REPO"/ps5/app/src/*.cpp "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c"
-    "$REPO"/ps5/spike-app/src/compat*.c "$REPO/ps5/runtime/heap.c"
+    "$REPO"/ps5/spike-app/src/compat*.c "$REPO/ps5/runtime/heap.c" "$REPO/ps5/runtime/abort.cpp"
     "$TEMPLATE/tooling/native/app_crt.cpp")
 while IFS= read -r file; do
     sources+=("$file")

@@ -361,10 +361,19 @@ int main()
     unsigned long frames = 0;
     for (;;)
     {
+        // The first frames say which stage they reach, to place a start-up failure.
+        const bool trace = frames < 3;
+        const auto stage = [&](const char *name) {
+            if (trace)
+                log_line("frame %lu: %s", frames + 1, name);
+        };
+
         // The core announces changes as events; the board is re-read after any of them.
+        stage("events");
         bool changed = false;
         while (stremio_core_poll_event(text.data(), text.size()) != 0)
             changed = true;
+        stage("account");
 
         // The account is looked at after every change and every two seconds, which is also
         // when a sign-in in progress is moved along (see the bridge's account.rs).
@@ -393,6 +402,7 @@ int main()
                 app.set_account(account);
             }
         }
+        stage("board");
         if (changed)
             refresh_board(app, text);
         if (rows_requested != 0 && app.focused_catalog() + kRowsAhead >= rows_requested)
@@ -406,10 +416,14 @@ int main()
         previous = now;
         pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
 
+        stage("update");
         canvas.begin();
         app.update(elapsed);
+        stage("draw");
         app.draw(width, height);
+        stage("show");
         canvas.show(display.width, display.height);
+        stage("present");
         if (!display.present())
         {
             log_line("present failed (0x%x)", eglGetError());

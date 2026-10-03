@@ -224,20 +224,17 @@ pub extern "C" fn stremio_core_load_board(rows: u32) -> i32 {
 }
 
 /// Takes the oldest uncollected event as JSON. Returns its length, or 0 when there is none.
-/// If the buffer is too small the event stays queued and its length is returned.
+/// An event that does not fit the buffer is taken off the queue all the same (it is not
+/// copied); its length, which is then `capacity` or more, tells the caller it was dropped.
 #[no_mangle]
 pub extern "C" fn stremio_core_poll_event(out: *mut c_char, capacity: usize) -> usize {
     let Ok(mut queue) = EVENTS.lock() else {
         return 0;
     };
-    let Some(event) = queue.front() else {
+    let Some(event) = queue.pop_front() else {
         return 0;
     };
-    let length = copy_out(event, out, capacity);
-    if length < capacity {
-        queue.pop_front();
-    }
-    length
+    copy_out(&event, out, capacity)
 }
 
 /// Serialises one model field (`"ctx"` or `"board"`, without quotes) as JSON. Returns the
