@@ -63,6 +63,10 @@ constexpr int kIoBuffer = 1 << 19;
 constexpr int kThumbWidth = 256;
 constexpr double kThumbEvery = 10.0;
 constexpr int kThumbsMost = 150;
+// How many of them are fetched at once. Each one is a separate request to the server for
+// a different part of the file, and it is those requests, not the decoding, that take
+// the time; several at once cut it accordingly.
+constexpr int kThumbWorkers = 6;
 
 double now_seconds()
 {
@@ -549,7 +553,11 @@ struct Player::Session
     int video_index = -1, audio_index = -1, subtitle_index = -1;
     double video_base = 0, audio_base = 0, subtitle_base = 0; // seconds per timestamp unit
     double origin = 0;                                        // the file's first timestamp, in seconds
-    std::thread reader, video_thread, audio_thread, preview_thread;
+    std::thread reader, video_thread, audio_thread;
+    std::vector<std::thread> preview_threads;
+    std::vector<int> thumb_order;     // which picture to make first, second, ...
+    std::atomic<int> thumb_next{0};   // the place in that order reached so far
+    std::atomic<int> thumbs_made{0};
 
     ~Session()
     {
@@ -786,7 +794,7 @@ struct Player::Session
         {
             video_thread = std::thread{[this] { run_video(); }};
             audio_thread = std::thread{[this] { run_audio(); }};
-            preview_thread = std::thread{[this] { run_preview(); }};
+            start_previews();
         }
         AVFormatContext *format = input.format;
         AVPacket *packet = av_packet_alloc();
@@ -897,8 +905,9 @@ struct Player::Session
             video_thread.join();
         if (audio_thread.joinable())
             audio_thread.join();
-        if (preview_thread.joinable())
-            preview_thread.join();
+        for (std::thread &worker : preview_threads)
+            if (worker.joinable())
+                worker.join();
     }
 
     void run_video()
@@ -1170,11 +1179,10 @@ struct Player::Session
         }
     }
 
-    // The scrubbing pictures: the file opened a second time, read on its own, with a
-    // decoder that only does key frames. Starting from where playback starts and working
-    // outwards, it jumps to each stretch of the video in turn and makes a small copy of
-    // the key frame there, so that by the time the user scrubs the pictures are on hand.
-    void run_preview()
+    // The scrubbing pictures: one for each stretch of the video, made in the background
+    // from when it opens so they are on hand by the time the user scrubs. The order is
+    // outwards from where playback starts; several workers go through it at once.
+    void start_previews()
     {
         double length, from;
         {
@@ -1186,6 +1194,27 @@ struct Player::Session
             return;
         const double every = std::max(kThumbEvery, length / kThumbsMost);
         const int count = std::max(1, static_cast<int>(length / every));
+        const int centre = std::clamp(static_cast<int>(from / every), 0, count - 1);
+        for (int step = 0; step < 2 * count; ++step)
+        {
+            const int which = centre + ((step & 1) ? (step + 1) / 2 : -(step / 2));
+            if (which >= 0 && which < count)
+                thumb_order.push_back(which);
+        }
+        {
+            std::lock_guard lock{mutex};
+            thumbs.assign(static_cast<std::size_t>(count), {});
+            thumb_every = every;
+        }
+        for (int worker = 0; worker < kThumbWorkers; ++worker)
+            preview_threads.emplace_back([this] { run_preview(); });
+    }
+
+    // One worker: the file opened again, read on its own, with a decoder that only does
+    // key frames. For each picture it takes from the order it jumps to that stretch of the
+    // video and makes a small copy of the key frame there.
+    void run_preview()
+    {
         Input second;
         std::string why;
         if (!second.open(url, stop, why))
@@ -1198,30 +1227,24 @@ struct Player::Session
         if (decoder == nullptr)
             return;
         decoder->skip_frame = AVDISCARD_NONKEY;
-        {
-            std::lock_guard lock{mutex};
-            thumbs.assign(static_cast<std::size_t>(count), {});
-            thumb_every = every;
-        }
         AVPacket *packet = av_packet_alloc();
         AVFrame *frame = av_frame_alloc();
         const double first = second.origin();
-        const int centre = std::clamp(static_cast<int>(from / every), 0, count - 1);
         const double started = now_seconds();
-        int made = 0;
-        // Outwards from the starting point: centre, centre + 1, centre - 1, centre + 2, ...
-        for (int step = 0; step < 2 * count && !stop; ++step)
+        const int count = static_cast<int>(thumb_order.size());
+        while (!stop)
         {
-            const int which = centre + ((step & 1) ? (step + 1) / 2 : -(step / 2));
-            if (which < 0 || which >= count)
-                continue;
+            const int place = thumb_next.fetch_add(1);
+            if (place >= count)
+                break;
+            const int which = thumb_order[static_cast<std::size_t>(place)];
             {
                 // Playback comes first: while it is waiting for data, this waits too.
                 std::unique_lock lock{mutex};
                 while (!stop && (starved || !video_primed) && !paused && !failed)
                     wake.wait_for(lock, std::chrono::milliseconds(100));
             }
-            const double target = (which + 0.5) * every;
+            const double target = (which + 0.5) * thumb_every;
             const auto stamp = static_cast<std::int64_t>((target + first) * AV_TIME_BASE);
             if (avformat_seek_file(second.format, -1, INT64_MIN, stamp, stamp, 0) < 0)
                 continue;
@@ -1247,7 +1270,7 @@ struct Player::Session
                             thumbs[static_cast<std::size_t>(which)] = std::move(pixels);
                             thumb_width = kThumbWidth;
                             thumb_height = height;
-                            ++made;
+                            ++thumbs_made;
                         }
                         av_frame_unref(frame);
                     }
@@ -1257,7 +1280,9 @@ struct Player::Session
                 av_packet_unref(packet);
             }
         }
-        note("scrubbing pictures: %d of %d made in %.0f s", made, count, now_seconds() - started);
+        if (!stop)
+            note("scrubbing pictures: %d of %d made, %.0f s after opening", thumbs_made.load(), count,
+                 now_seconds() - started);
         av_frame_free(&frame);
         av_packet_free(&packet);
         avcodec_free_context(&decoder);
