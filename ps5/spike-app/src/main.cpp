@@ -3,6 +3,7 @@
 
 #include "demo_renderer.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 
@@ -13,6 +14,7 @@ extern "C"
     std::uint64_t spike_wall_clock_ms();
     std::uint64_t spike_monotonic_ms(std::uint32_t ms);
     std::int32_t spike_http_status(const char *host);
+    void spike_detail(char *out, std::size_t capacity);
 }
 
 namespace
@@ -31,15 +33,26 @@ void log_line(const char *text) noexcept
     }
 }
 
+// Logs the detail text the last check left behind, if any.
+void log_detail() noexcept
+{
+    char detail[256];
+    spike_detail(detail, sizeof detail);
+    if (detail[0] != 0)
+        log_line(detail);
+}
+
 void record_results() noexcept
 {
     std::remove("/download0/spike.log");
     log_line("BEGIN THREADS");
     std::snprintf(lines[0], sizeof lines[0], "THREADS %u OF 8", spike_threads(8));
     log_line(lines[0]);
+    log_detail();
     log_line("BEGIN FILES");
     std::snprintf(lines[1], sizeof lines[1], "FILES STEP %d", spike_files("/download0/spike"));
     log_line(lines[1]);
+    log_detail();
     log_line("BEGIN CLOCKS");
     std::snprintf(lines[2], sizeof lines[2], "WALL CLOCK %llu",
                   static_cast<unsigned long long>(spike_wall_clock_ms()));
@@ -51,6 +64,7 @@ void record_results() noexcept
     std::snprintf(lines[4], sizeof lines[4], "HTTP EXAMPLE.COM %d",
                   spike_http_status("example.com"));
     log_line(lines[4]);
+    log_detail();
     std::snprintf(lines[5], sizeof lines[5], "DONE");
     log_line(lines[5]);
 }

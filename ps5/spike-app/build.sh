@@ -18,6 +18,10 @@ sdk=$TEMPLATE/.deps/native/ps5-payload-sdk
 cargo_args=(build --release --target "$RUST_TARGET")
 if [[ $RUST_TARGET == *.json ]]; then
     cargo_args+=(-Zbuild-std=std,panic_abort -Zjson-target-spec)
+    # The console's kernel is FreeBSD 11: file status, directory entries and kernel events
+    # use the layouts from before FreeBSD 12, which is what the libc crate assumes by default.
+    export RUSTFLAGS='--cfg libc_unstable_freebsd_version="11"'
+    bash "$REPO/ps5/patch-rust-src.sh"
 fi
 (cd "$REPO/ps5/spike-rust" && CARGO_TARGET_DIR=$WORK/target-spike cargo "${cargo_args[@]}")
 triple=$(basename "$RUST_TARGET" .json)
@@ -30,7 +34,12 @@ rsync -a --delete --exclude .git --exclude build --exclude dist --exclude src \
 mkdir -p "$app/src" "$app/vendor"
 cp "$TEMPLATE/src/demo_renderer.cpp" "$TEMPLATE/src/demo_renderer.hpp" "$app/src/"
 cp "$REPO"/ps5/spike-app/src/*.cpp "$REPO"/ps5/spike-app/src/*.c "$app/src/"
-cp "$rust_lib" "$app/vendor/libspike_rust.a"
+# With FreeBSD 11 layouts the libc crate asks for versioned names such as stat@FBSD_1.0.
+# The console's modules export the same functions unversioned, so the suffix is removed.
+"$sdk/bin/prospero-nm" -u "$rust_lib" 2>/dev/null | awk '{print $NF}' | grep '@FBSD_' |
+    sort -u | sed -E 's/^(.*)@FBSD_.*$/& \1/' > "$WORK/target-spike/versioned-symbols.txt"
+"$sdk/bin/prospero-objcopy" --redefine-syms="$WORK/target-spike/versioned-symbols.txt" \
+    "$rust_lib" "$app/vendor/libspike_rust.a"
 cp "$REPO/ps5/spike-app/app-symbols.map" "$app/tooling/native/app-symbols.map"
 
 # 3. Identity, then the template's own build.
