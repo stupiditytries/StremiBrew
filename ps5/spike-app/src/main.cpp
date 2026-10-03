@@ -15,6 +15,7 @@ extern "C"
     std::uint64_t spike_monotonic_ms(std::uint32_t ms);
     std::int32_t spike_http_status(const char *host);
     void spike_detail(char *out, std::size_t capacity);
+    void net_diag(void (*log)(const char *));
 }
 
 namespace
@@ -65,6 +66,7 @@ void record_results() noexcept
                   spike_http_status("example.com"));
     log_line(lines[4]);
     log_detail();
+    net_diag([](const char *text) { log_line(text); });
     std::snprintf(lines[5], sizeof lines[5], "DONE");
     log_line(lines[5]);
 }
