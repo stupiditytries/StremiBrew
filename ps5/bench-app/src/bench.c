@@ -12,6 +12,8 @@
 #include <libavformat/avformat.h>
 #include <libavutil/pixdesc.h>
 
+void app_heap_stats(size_t *in_use, size_t *peak, size_t *mapped);
+
 static double seconds_now(void)
 {
     struct timespec now;
@@ -163,8 +165,16 @@ void bench_run(const char *path, void (*log)(const char *), void (*result)(int, 
             result(threads, rate);
             return;
         }
-        logf_line(log, "RESULT %2d threads: %.1f fps", threads, rate);
+        size_t in_use, peak, mapped;
+        app_heap_stats(&in_use, &peak, &mapped);
+        logf_line(log, "RESULT %2d threads: %.1f fps (heap peak %zu MiB, mapped %zu MiB)",
+                  threads, rate, peak >> 20, mapped >> 20);
         result(threads, rate);
+        if (rate == 0)
+        {
+            log("STOP: nothing was decoded");
+            return;
+        }
     }
     log("DONE");
 }

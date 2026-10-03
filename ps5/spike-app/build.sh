@@ -41,6 +41,8 @@ rsync -a --delete --exclude .git --exclude build --exclude dist --exclude src \
 mkdir -p "$app/src" "$app/vendor"
 cp "$TEMPLATE/src/demo_renderer.cpp" "$TEMPLATE/src/demo_renderer.hpp" "$app/src/"
 cp "$REPO"/ps5/spike-app/src/*.cpp "$REPO"/ps5/spike-app/src/*.c "$app/src/"
+# The app's own heap (the console's C library heap is too small).
+cp "$REPO/ps5/runtime/heap.c" "$app/src/"
 # With FreeBSD 11 layouts the libc crate asks for versioned names such as stat@FBSD_1.0.
 # The console's modules export the same functions unversioned, so the suffix is removed.
 "$sdk/bin/prospero-nm" -u "$rust_lib" 2>/dev/null | awk '{print $NF}' | grep '@FBSD_' |

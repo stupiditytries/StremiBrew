@@ -20,6 +20,8 @@ mkdir -p "$app/src" "$app/vendor/lib"
 cp "$TEMPLATE/src/demo_renderer.cpp" "$TEMPLATE/src/demo_renderer.hpp" "$app/src/"
 cp "$REPO"/ps5/bench-app/src/* "$app/src/"
 cp "$REPO"/ps5/spike-app/src/compat*.c "$app/src/"
+# The app's own heap (the console's C library heap is too small).
+cp "$REPO/ps5/runtime/heap.c" "$app/src/"
 cp -r "$ffmpeg/include" "$app/vendor/include"
 cp "$ffmpeg"/lib/libavformat.a "$ffmpeg"/lib/libavcodec.a "$ffmpeg"/lib/libswresample.a \
     "$ffmpeg"/lib/libavutil.a "$app/vendor/lib/"
