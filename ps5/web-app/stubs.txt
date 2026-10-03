@@ -1,0 +1,4 @@
+# Console modules the SDK has no import stub for: module name, then the functions the app
+# imports from it. ps5/web-app/build.sh turns each line into a stub library.
+libSceCommonDialog sceCommonDialogInitialize
+libSceWebBrowserDialog sceWebBrowserDialogInitialize sceWebBrowserDialogOpen sceWebBrowserDialogUpdateStatus
