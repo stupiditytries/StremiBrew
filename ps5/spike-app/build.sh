@@ -56,7 +56,7 @@ cp "$REPO/ps5/spike-app/app-symbols.map" "$app/tooling/native/app-symbols.map"
 
 # 4. Every import must come from a module a game process loads; an import that only
 #    libScePosixForWebKit or libkernel_sys provides is a null pointer on the console.
-if readelf -d "$app/build/llvm-pie.elf" | grep -E 'NEEDED.*lib(ScePosixForWebKit|kernel_sys|kernel_web)'; then
+if readelf -d "$app/build/llvm-pie.elf" | grep -E 'NEEDED.*lib(ScePosixForWebKit|SceRandom|kernel_sys|kernel_web)'; then
     echo "error: the app imports from a module that game processes do not load" >&2
     exit 1
 fi

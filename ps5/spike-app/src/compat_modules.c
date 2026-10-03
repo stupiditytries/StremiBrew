@@ -15,10 +15,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-int sceRandomGetRandomNumber(void *buffer, size_t size);
 void pthread_set_name_np(pthread_t thread, const char *name);
 
 static int unsupported(void)
@@ -27,16 +27,24 @@ static int unsupported(void)
     return -1;
 }
 
-void arc4random_buf(void *buffer, size_t size)
+/*
+ * Random bytes come from the kernel's generator (the kern.arandom sysctl, which FreeBSD 11's
+ * own C library uses), with /dev/urandom as a second source. The console's random service
+ * (libSceRandom) is not used: its import was a null pointer in a game process.
+ * Returns 0 when every byte was filled.
+ */
+static int fill_random(void *buffer, size_t size)
 {
     unsigned char *cursor = buffer;
+    int name[2] = {CTL_KERN, KERN_ARND};
     while (size > 0)
     {
-        size_t chunk = size < 64 ? size : 64; /* the service fills at most 64 bytes */
-        if (sceRandomGetRandomNumber(cursor, chunk) != 0)
+        size_t chunk = size < 256 ? size : 256;
+        size_t filled = chunk;
+        if (sysctl(name, 2, cursor, &filled, NULL, 0) != 0 || filled == 0)
             break;
-        cursor += chunk;
-        size -= chunk;
+        cursor += filled;
+        size -= filled;
     }
     if (size > 0)
     {
@@ -54,13 +62,26 @@ void arc4random_buf(void *buffer, size_t size)
             close(descriptor);
         }
     }
+    return size == 0 ? 0 : -1;
+}
+
+void arc4random_buf(void *buffer, size_t size)
+{
+    /* This call cannot report failure, and handing back predictable bytes to code that
+     * asked for random ones is worse than stopping. */
+    if (fill_random(buffer, size) != 0)
+        __builtin_trap();
 }
 
 /* FreeBSD 12's entropy call, which the console's FreeBSD 11 kernel module lacks. */
 ssize_t getrandom(void *buffer, size_t size, unsigned int flags)
 {
     (void)flags;
-    arc4random_buf(buffer, size);
+    if (fill_random(buffer, size) != 0)
+    {
+        errno = EIO;
+        return -1;
+    }
     return (ssize_t)size;
 }
 
