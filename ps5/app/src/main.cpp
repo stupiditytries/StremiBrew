@@ -388,7 +388,7 @@ int main()
         }
         if (changed)
             refresh_board(app, text);
-        if (rows_requested != 0 && app.focused_row() + kRowsAhead >= rows_requested)
+        if (rows_requested != 0 && app.focused_catalog() + kRowsAhead >= rows_requested)
         {
             stremio_core_board_load_range(rows_requested, rows_requested + kRowBatch);
             rows_requested += kRowBatch;

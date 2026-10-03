@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,9 @@ struct BoardItem
 
 struct BoardRow
 {
+    // The row's position among all of the board's catalogs, including those not shown
+    // (a catalog that returned nothing has no row). The host requests rows by this number.
+    std::size_t index = 0;
     std::string title; // "Popular - Movie"
     PosterShape shape = PosterShape::Poster;
     bool loading = false;

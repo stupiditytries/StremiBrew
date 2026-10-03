@@ -302,6 +302,9 @@ pub extern "C" fn stremio_core_last_error(out: *mut c_char, capacity: usize) -> 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BoardRow<'a> {
+    /// The row's position among all of the board's catalogs, shown or not. Rows are
+    /// requested from the core by this number.
+    index: usize,
     id: &'a str,
     name: &'a str,
     r#type: &'a str,
@@ -361,8 +364,15 @@ pub extern "C" fn stremio_core_board_rows(
         .board
         .catalogs
         .iter()
-        .filter_map(|catalog| catalog.first())
-        .filter_map(|page| {
+        .enumerate()
+        .filter_map(|(index, catalog)| Some((index, catalog.first()?)))
+        .filter_map(|(index, page)| {
+            // A catalog that answered with nothing, or failed, takes no row at all.
+            match &page.content {
+                Some(Loadable::Ready(items)) if items.is_empty() => return None,
+                Some(Loadable::Err(_)) => return None,
+                _ => {}
+            }
             // A row is titled by the catalog's entry in its add-on's manifest.
             let addon = model
                 .ctx
@@ -413,6 +423,7 @@ pub extern "C" fn stremio_core_board_rows(
                 Some(Loadable::Loading) | None => ("loading", None, vec![]),
             };
             Some(BoardRow {
+                index,
                 id: &catalog.id,
                 name: catalog.name.as_deref().unwrap_or(&addon.manifest.name),
                 r#type: &catalog.r#type,

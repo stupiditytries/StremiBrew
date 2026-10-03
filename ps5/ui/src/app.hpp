@@ -50,10 +50,11 @@ class App
         std::function<bool(const std::string &address)> failed);
     void set_account(Account account);
     void set_intent_handler(std::function<void(Intent)> handler);
-    // The board row the focus is on, so the host can load rows ahead of it.
-    std::size_t focused_row() const
+    // The catalog (by its position among all of the board's catalogs) of the row the
+    // focus is on, so the host can load rows ahead of it.
+    std::size_t focused_catalog() const
     {
-        return row_focus_;
+        return row_focus_ < rows_.size() ? rows_[row_focus_].index : 0;
     }
     void press(Button button);
     void update(float seconds);

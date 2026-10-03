@@ -35,6 +35,7 @@ bool parse_board(std::string_view json, std::vector<BoardRow> &rows)
     for (const auto &entry : document)
     {
         BoardRow row;
+        row.index = entry.value("index", rows.size());
         row.title = entry.value("name", std::string{}) + " - " +
                     capitalised(entry.value("type", std::string{}));
         const std::string state = entry.value("state", std::string{"loading"});
