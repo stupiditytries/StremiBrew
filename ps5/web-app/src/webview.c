@@ -2,9 +2,11 @@
  * Web-view spike: opens a page in the console's built-in web engine through the browser
  * dialog, asking for a full-screen view with no title bar, address bar or footer.
  *
- * The structures follow the dialog's PS4-era interface; whether the PS5 module accepts
- * them unchanged is one of the things this spike finds out, so every call's result is
- * logged and nothing is assumed to succeed.
+ * The dialog's modules are not loaded into a game process by default and the system-module
+ * loader rejected the PS4-era module number, so they are loaded by file name and their
+ * functions looked up by name. The structures follow the dialog's PS4-era interface;
+ * whether the PS5 module accepts them unchanged is one of the things this spike finds out,
+ * so every call's result is logged and nothing is assumed to succeed.
  */
 
 #include <stddef.h>
@@ -12,29 +14,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define IMPORT
-
-/* Whether the loader resolved an imported function. An import from a module that is not
- * loaded is a null pointer; the address is read through a volatile so the compiler cannot
- * assume it is non-null. */
-static int resolved(void *volatile function)
-{
-    return function != NULL;
-}
-
-IMPORT int sceUserServiceInitialize(void *parameters);
-IMPORT int sceUserServiceGetInitialUser(int32_t *user);
-IMPORT int sceSysmoduleLoadModule(uint32_t module);
-IMPORT int sceSysmoduleLoadModuleInternal(uint32_t module);
-IMPORT int sceCommonDialogInitialize(void);
-IMPORT int sceWebBrowserDialogInitialize(void);
-IMPORT int sceWebBrowserDialogOpen(const void *parameters);
-IMPORT int sceWebBrowserDialogUpdateStatus(void);
-IMPORT int sceWebBrowserDialogGetStatus(void);
-IMPORT int sceWebBrowserDialogClose(void);
-IMPORT int sceWebBrowserDialogTerminate(void);
-
-#define MODULE_WEB_BROWSER_DIALOG 0x0080u
+int sceUserServiceInitialize(void *parameters);
+int sceUserServiceGetInitialUser(int32_t *user);
+int sceKernelLoadStartModule(const char *path, size_t argument_size, const void *argument,
+                             uint32_t flags, void *options, int *result);
+int sceKernelDlsym(int module, const char *symbol, void **address);
+const char *sceKernelGetFsSandboxRandomWord(void);
 
 #define COMMON_DIALOG_MAGIC 0xC0D1A109u
 
@@ -76,14 +61,52 @@ struct web_browser_dialog_param
 };
 
 static void (*log_line)(const char *);
+static int (*dialog_update_status)(void);
 static int last_status = -100;
 
 static void report(const char *step, long result)
 {
-    char line[96];
+    char line[112];
     snprintf(line, sizeof line, "WEB %s = %ld (0x%08lx)", step, result,
              (unsigned long)(uint32_t)result);
     log_line(line);
+}
+
+/* Loads a system module by file name, trying the folders it can live in. Returns its
+ * handle, or a negative error. */
+static int load_module(const char *name)
+{
+    char path[160];
+    char step[160];
+    int handle = -1;
+    const char *word = sceKernelGetFsSandboxRandomWord();
+    const char *folders[] = {"/system/common/lib", "/%s/common/lib", "/system_ex/common_ex/lib"};
+    for (unsigned index = 0; index < sizeof folders / sizeof folders[0]; ++index)
+    {
+        char folder[96];
+        snprintf(folder, sizeof folder, folders[index], word != NULL ? word : "system");
+        snprintf(path, sizeof path, "%s/%s", folder, name);
+        handle = sceKernelLoadStartModule(path, 0, NULL, 0, NULL, NULL);
+        snprintf(step, sizeof step, "load %s", path);
+        report(step, handle);
+        if (handle >= 0)
+            return handle;
+    }
+    return handle;
+}
+
+static void *lookup(int module, const char *symbol)
+{
+    void *address = NULL;
+    int result = sceKernelDlsym(module, symbol, &address);
+    if (result != 0 || address == NULL)
+    {
+        char step[96];
+        snprintf(step, sizeof step, "lookup %s", symbol);
+        report(step, result);
+        return NULL;
+    }
+    return address;
 }
 
 static void fill(struct web_browser_dialog_param *param, int32_t user, const char *url,
@@ -114,41 +137,40 @@ int webview_open(const char *url, void (*log)(const char *))
     static struct web_browser_dialog_param param;
     log_line = log;
 
-    char line[96];
-    snprintf(line, sizeof line, "WEB param sizes: base %zu, dialog %zu", sizeof param.base,
-             sizeof param);
-    log(line);
-
-    if (!resolved((void *)sceSysmoduleLoadModule) || !resolved((void *)sceWebBrowserDialogOpen))
-        log("WEB note: some imports are unresolved before the module is loaded");
-
     int32_t user = 0;
-    if (resolved((void *)sceUserServiceInitialize))
-        report("sceUserServiceInitialize", sceUserServiceInitialize(NULL));
-    if (resolved((void *)sceUserServiceGetInitialUser))
-        report("sceUserServiceGetInitialUser", sceUserServiceGetInitialUser(&user));
-    report("user", user);
+    report("sceUserServiceInitialize", sceUserServiceInitialize(NULL));
+    report("sceUserServiceGetInitialUser", sceUserServiceGetInitialUser(&user));
 
-    if (resolved((void *)sceSysmoduleLoadModule))
-        report("sceSysmoduleLoadModule", sceSysmoduleLoadModule(MODULE_WEB_BROWSER_DIALOG));
-    if (!resolved((void *)sceCommonDialogInitialize) || !resolved((void *)sceWebBrowserDialogInitialize) ||
-        !resolved((void *)sceWebBrowserDialogOpen) || !resolved((void *)sceWebBrowserDialogUpdateStatus))
+    int common = load_module("libSceCommonDialog.sprx");
+    int browser = load_module("libSceWebBrowserDialog.sprx");
+    if (common < 0 || browser < 0)
     {
-        log("WEB dialog functions are still unresolved after loading the module");
+        log("WEB the dialog modules could not be loaded");
         return -1;
     }
-    report("sceCommonDialogInitialize", sceCommonDialogInitialize());
-    report("sceWebBrowserDialogInitialize", sceWebBrowserDialogInitialize());
+    int (*common_initialize)(void) = lookup(common, "sceCommonDialogInitialize");
+    int (*initialize)(void) = lookup(browser, "sceWebBrowserDialogInitialize");
+    int (*open)(const void *) = lookup(browser, "sceWebBrowserDialogOpen");
+    dialog_update_status = lookup(browser, "sceWebBrowserDialogUpdateStatus");
+    if (common_initialize == NULL || initialize == NULL || open == NULL ||
+        dialog_update_status == NULL)
+    {
+        log("WEB the dialog functions could not be found");
+        return -1;
+    }
+
+    report("sceCommonDialogInitialize", common_initialize());
+    report("sceWebBrowserDialogInitialize", initialize());
 
     fill(&param, user, url, MODE_CUSTOM);
-    int opened = sceWebBrowserDialogOpen(&param);
-    report("sceWebBrowserDialogOpen full screen, no bars", opened);
+    int opened = open(&param);
+    report("open full screen no bars", opened);
     if (opened != 0)
     {
         /* Fall back to the standard dialog, to learn whether the dialog works at all. */
         fill(&param, user, url, MODE_DEFAULT);
-        opened = sceWebBrowserDialogOpen(&param);
-        report("sceWebBrowserDialogOpen standard", opened);
+        opened = open(&param);
+        report("open standard", opened);
     }
     return opened;
 }
@@ -156,9 +178,9 @@ int webview_open(const char *url, void (*log)(const char *))
 /* Call once per frame while the dialog is open; logs each change of its status. */
 void webview_update(void)
 {
-    if (log_line == NULL || !resolved((void *)sceWebBrowserDialogUpdateStatus))
+    if (log_line == NULL || dialog_update_status == NULL)
         return;
-    int status = sceWebBrowserDialogUpdateStatus();
+    int status = dialog_update_status();
     if (status != last_status)
     {
         last_status = status;
