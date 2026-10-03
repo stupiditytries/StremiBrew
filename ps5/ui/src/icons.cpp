@@ -91,21 +91,34 @@ void addons(NVGcontext *vg, float s)
 
 void settings(NVGcontext *vg, float s)
 {
-    // A gear: eight teeth around a ring.
+    // A gear, as one outline: eight teeth that widen towards the rim's body, and a hole
+    // in the middle. Each tooth takes half of its eighth of the circle at the tip.
+    constexpr int kTeeth = 8;
+    constexpr float kOuter = 0.46f, kInner = 0.34f, kHole = 0.15f;
+    const float step = 2 * kPi / kTeeth;
     nvgBeginPath(vg);
-    for (int tooth = 0; tooth < 8; ++tooth)
+    for (int tooth = 0; tooth < kTeeth; ++tooth)
     {
-        const float angle = tooth * kPi / 4.0f;
-        nvgSave(vg);
-        nvgRotate(vg, angle);
-        nvgRoundedRect(vg, -0.09f * s, -0.46f * s, 0.18f * s, 0.22f * s, 0.03f * s);
-        nvgRestore(vg);
+        const float centre = tooth * step;
+        // Angles of the tooth's base (on the inner radius) and tip (on the outer one).
+        const float corners[4][2] = {
+            {centre - step * 0.30f, kInner},
+            {centre - step * 0.18f, kOuter},
+            {centre + step * 0.18f, kOuter},
+            {centre + step * 0.30f, kInner},
+        };
+        for (int corner = 0; corner < 4; ++corner)
+        {
+            const float x = std::sin(corners[corner][0]) * corners[corner][1] * s;
+            const float y = -std::cos(corners[corner][0]) * corners[corner][1] * s;
+            if (tooth == 0 && corner == 0)
+                nvgMoveTo(vg, x, y);
+            else
+                nvgLineTo(vg, x, y);
+        }
     }
-    nvgCircle(vg, 0, 0, 0.32f * s);
-    nvgFill(vg);
-    nvgBeginPath(vg);
-    nvgCircle(vg, 0, 0, 0.32f * s);
-    nvgCircle(vg, 0, 0, 0.13f * s);
+    nvgClosePath(vg);
+    nvgCircle(vg, 0, 0, kHole * s);
     nvgPathWinding(vg, NVG_HOLE);
     nvgFill(vg);
 }

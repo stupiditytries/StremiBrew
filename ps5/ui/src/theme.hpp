@@ -30,6 +30,12 @@ inline NVGcolor accent(float opacity = 1.0f)
 {
     return nvgRGBAf(123 / 255.0f, 91 / 255.0f, 245 / 255.0f, opacity);
 }
+// White at `opacity` as it looks over the black background, as an opaque colour. Used
+// where a translucent colour would reveal overlapping shapes (see draw_icon).
+inline NVGcolor foreground_solid(float opacity)
+{
+    return nvgRGBf(opacity, opacity, opacity);
+}
 // The faint white wash Stremio puts behind fields, placeholders and hovered buttons.
 inline NVGcolor overlay(float strength = 1.0f)
 {
@@ -42,7 +48,7 @@ inline constexpr float kFocusOutline = units(0.2f);
 // Navigation column on the left and the bar across the top.
 inline constexpr float kNavWidth = units(6.0f);
 inline constexpr float kNavButton = units(4.8f);
-inline constexpr float kNavIcon = units(2.2f);
+inline constexpr float kNavIcon = units(1.5f);
 inline constexpr float kNavGap = units(1.0f);
 inline constexpr float kNavLabelSize = units(0.8f);
 inline constexpr float kTopBarHeight = units(5.5f);

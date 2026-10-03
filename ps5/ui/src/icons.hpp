@@ -17,6 +17,8 @@ enum class Icon
     Search,
 };
 
-// Draws `icon` centred on (x, y) within a square of side `size`, in `color`.
+// Draws `icon` centred on (x, y) within a square of side `size`, in `color`. Some icons are
+// built from shapes that overlap, so `color` must be opaque: a translucent one would show
+// the overlaps as darker patches. Dim an icon by mixing its colour with the background's.
 void draw_icon(NVGcontext *vg, Icon icon, float x, float y, float size, NVGcolor color);
 } // namespace ui

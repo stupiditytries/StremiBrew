@@ -234,6 +234,11 @@ void App::update(float seconds)
     for (std::size_t row = 0; row < scroll_x_.size(); ++row)
         scroll_x_[row] = eased(scroll_x_[row], scroll_x_target_[row], seconds);
     focus_pulse_ = eased(focus_pulse_, 1.0f, seconds);
+    for (int index = 0; index < kTabCount; ++index)
+    {
+        const bool focused = zone_ == Zone::Navigation && index == navigation_focus_;
+        navigation_reveal_[index] = eased(navigation_reveal_[index], focused ? 1.0f : 0.0f, seconds);
+    }
 }
 
 void App::draw_navigation()
@@ -244,28 +249,34 @@ void App::draw_navigation()
     {
         const bool selected = index == selected_tab_;
         const bool focused = zone_ == Zone::Navigation && index == navigation_focus_;
-        if (focused)
+        const float reveal = navigation_reveal_[index];
+        if (reveal > 0.01f)
         {
             nvgBeginPath(vg_);
             nvgRoundedRect(vg_, x, top, kNavButton, kNavButton, kRadius);
-            nvgFillColor(vg_, overlay(2.0f));
+            nvgFillColor(vg_, overlay(2.0f * reveal));
             nvgFill(vg_);
-            focus_ring(vg_, x, top, kNavButton, kNavButton, kRadius);
         }
-        // Stremio shows a tab's name only while it is selected (or pointed at), and tints
-        // the selected tab with its accent colour.
-        const bool labelled = selected || focused;
-        const NVGcolor color = selected ? accent() : foreground(focused ? 0.9f : 0.35f);
+        if (focused)
+            focus_ring(vg_, x, top, kNavButton, kNavButton, kRadius);
+
+        // As in Stremio: the selected tab is tinted with the accent colour, the others are
+        // dim, and a tab's name appears only while the focus is on it. The icon keeps its
+        // place; the name fades in beneath it.
         const float centre_x = x + kNavButton / 2;
-        const float icon_y = top + kNavButton / 2 - (labelled ? units(0.55f) : 0.0f);
-        draw_icon(vg_, kTabs[index].icon, centre_x, icon_y, kNavIcon, color);
-        if (labelled)
+        const float icon_y = top + kNavButton / 2 - units(0.45f);
+        const NVGcolor icon_color =
+            selected ? accent() : foreground_solid(0.35f + (0.9f - 0.35f) * reveal);
+        draw_icon(vg_, kTabs[index].icon, centre_x, icon_y, kNavIcon, icon_color);
+        if (reveal > 0.01f)
         {
             nvgFontFace(vg_, "medium");
             nvgFontSize(vg_, kNavLabelSize);
             nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_TOP);
-            nvgFillColor(vg_, color);
-            nvgText(vg_, centre_x, icon_y + kNavIcon / 2 + units(0.4f), kTabs[index].label, nullptr);
+            nvgFillColor(vg_, selected ? accent(reveal) : foreground(0.9f * reveal));
+            // The name also rises a little into place as it appears.
+            nvgText(vg_, centre_x, icon_y + kNavIcon / 2 + units(0.45f) + units(0.3f) * (1 - reveal),
+                    kTabs[index].label, nullptr);
         }
         top += kNavButton + kNavGap;
     }
@@ -297,7 +308,7 @@ void App::draw_top_bar()
     nvgFillColor(vg_, foreground(0.6f));
     nvgText(vg_, x + units(1.5f), y + kSearchHeight / 2, "Search or paste link", nullptr);
     draw_icon(vg_, Icon::Search, x + kSearchWidth - units(2.0f), y + kSearchHeight / 2,
-              units(1.6f), foreground(0.6f));
+              units(1.4f), foreground_solid(0.62f));
 }
 
 void App::draw_row(const BoardRow &row, std::size_t index, float top)

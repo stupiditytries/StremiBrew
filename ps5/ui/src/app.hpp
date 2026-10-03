@@ -71,5 +71,9 @@ class App
     float scroll_y_ = 0, scroll_y_target_ = 0;
     std::vector<float> scroll_x_, scroll_x_target_;
     float focus_pulse_ = 0; // 0..1, eases to 1 after the focus moves
+    // How visible each navigation button's label and highlight are, 0..1. A tab's name
+    // shows only while the focus is on it, and fades in and out as the focus moves.
+    static constexpr int kMaxTabs = 8;
+    float navigation_reveal_[kMaxTabs] = {};
 };
 } // namespace ui
