@@ -7,8 +7,9 @@ use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use stremio_core_ps5::{
-    stremio_core_board_rows, stremio_core_board_summary, stremio_core_details, stremio_core_init,
-    stremio_core_load_details,
+    stremio_core_account, stremio_core_account_advance, stremio_core_board_rows,
+    stremio_core_board_summary, stremio_core_details, stremio_core_init,
+    stremio_core_load_details, stremio_core_sign_in_start,
     stremio_core_last_error, stremio_core_load_board, stremio_core_poll_event,
 };
 
@@ -50,6 +51,20 @@ fn main() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // "link" as the third argument instead: request a sign-in code and show the account's
+    // state for a few seconds (without anyone entering the code, it stays "waiting").
+    if std::env::args().nth(3).as_deref() == Some("link") {
+        stremio_core_sign_in_start();
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_secs(2));
+            stremio_core_account_advance();
+            let account = text(|out, cap| stremio_core_account(out, cap));
+            // The code is shown to whoever runs this; nothing else in the state is secret.
+            println!("{account}");
+        }
+        return;
     }
 
     // Optionally a title's details too: <type> <id> [video id] [output file].

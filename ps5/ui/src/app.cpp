@@ -107,6 +107,31 @@ void App::set_image_fetcher(
     images_->set_fetcher(std::move(fetcher));
 }
 
+void App::set_account(Account account)
+{
+    account_ = std::move(account);
+}
+
+void App::set_intent_handler(std::function<void(Intent)> handler)
+{
+    intent_ = std::move(handler);
+}
+
+// Moves the focus from the sidebar into the selected tab's screen.
+void App::enter_tab()
+{
+    selected_tab_ = navigation_focus_;
+    if (kTabs[selected_tab_].icon == Icon::Board)
+    {
+        if (!rows_.empty())
+            zone_ = Zone::Rows;
+    }
+    else if (kTabs[selected_tab_].icon == Icon::Settings)
+    {
+        zone_ = Zone::Content;
+    }
+}
+
 void App::set_board(std::vector<BoardRow> rows)
 {
     // The board is refreshed as each row finishes loading. While the set of rows stays the
@@ -195,10 +220,25 @@ void App::press(Button button)
             --navigation_focus_;
         else if (button == Button::Down && navigation_focus_ < kTabCount - 1)
             ++navigation_focus_;
-        else if (button == Button::Right && !rows_.empty())
-            zone_ = Zone::Rows;
-        else if (button == Button::Accept)
-            selected_tab_ = navigation_focus_;
+        else if (button == Button::Right || button == Button::Accept)
+            enter_tab();
+        break;
+    case Zone::Content:
+        if (button == Button::Left || button == Button::Back)
+        {
+            zone_ = Zone::Navigation;
+            navigation_focus_ = selected_tab_;
+        }
+        else if (button == Button::Accept && intent_)
+        {
+            // The Settings screen's one button does whatever the account's state calls for.
+            if (account_.signed_in)
+                intent_(Intent::SignOut);
+            else if (account_.link == Account::Link::Idle || account_.link == Account::Link::Error)
+                intent_(Intent::SignIn);
+            else
+                intent_(Intent::CancelSignIn);
+        }
         break;
     case Zone::Search:
         if (button == Button::Down && !rows_.empty())
@@ -252,6 +292,15 @@ void App::update(float seconds)
     for (std::size_t row = 0; row < scroll_x_.size(); ++row)
         scroll_x_[row] = eased(scroll_x_[row], scroll_x_target_[row], seconds);
     focus_pulse_ = eased(focus_pulse_, 1.0f, seconds);
+    const BoardItem *item = focused_item();
+    const std::string hero = item != nullptr ? item->id : std::string{};
+    if (hero != hero_item_)
+    {
+        hero_item_ = hero;
+        hero_fade_ = 0;
+    }
+    // Slower than the focus animation, so artwork eases in rather than snapping.
+    hero_fade_ += (1.0f - hero_fade_) * (1.0f - std::exp(-seconds * 6.0f));
     for (int index = 0; index < kTabCount; ++index)
     {
         const bool focused = zone_ == Zone::Navigation && index == navigation_focus_;
@@ -304,15 +353,6 @@ void App::draw_navigation()
 
 void App::draw_top_bar()
 {
-    // The bar fades the rows out as they scroll under it.
-    const NVGpaint fade = nvgLinearGradient(vg_, 0, kTopBarHeight - units(1.0f), 0,
-                                            kTopBarHeight + units(1.0f), nvgRGBA(0, 0, 0, 255),
-                                            nvgRGBA(0, 0, 0, 0));
-    nvgBeginPath(vg_);
-    nvgRect(vg_, 0, 0, kScreenWidth, kTopBarHeight + units(1.0f));
-    nvgFillPaint(vg_, fade);
-    nvgFill(vg_);
-
     const float x = (kScreenWidth - kSearchWidth) / 2;
     const float y = (kTopBarHeight - kSearchHeight) / 2;
     nvgBeginPath(vg_);
@@ -418,12 +458,148 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
         draw_card(focused);
 }
 
+const BoardItem *App::focused_item() const
+{
+    if (row_focus_ >= rows_.size())
+        return nullptr;
+    const BoardRow &row = rows_[row_focus_];
+    const std::size_t column = column_focus_[row_focus_];
+    return column < row.items.size() ? &row.items[column] : nullptr;
+}
+
+// The featured area: the focused item's background artwork on the right, fading into the
+// black on its left and lower edges, with its title, key facts and description on the left.
+void App::draw_hero()
+{
+    const BoardItem *item = focused_item();
+    if (item == nullptr)
+        return;
+    const float fade = hero_fade_;
+
+    // Artwork, 16:9 at the area's full height, against the right edge.
+    const float image_height = kHeroHeight;
+    const float image_width = image_height * 16.0f / 9.0f;
+    const float image_left = kScreenWidth - image_width;
+    const Images::Texture background = images_->get(item->background);
+    if (background.handle != 0)
+    {
+        nvgGlobalAlpha(vg_, fade);
+        cover_image(vg_, image_left, 0, image_width, image_height, 0, background);
+        nvgGlobalAlpha(vg_, 1.0f);
+        const auto shade = [&](float x0, float y0, float x1, float y1, float from, float to) {
+            nvgBeginPath(vg_);
+            nvgRect(vg_, image_left - 1, 0, image_width + 2, image_height + 1);
+            nvgFillPaint(vg_, nvgLinearGradient(vg_, x0, y0, x1, y1, nvgRGBAf(0, 0, 0, from),
+                                                nvgRGBAf(0, 0, 0, to)));
+            nvgFill(vg_);
+        };
+        // Into the black on the left, into the rows below, and a little under the search bar.
+        shade(image_left, 0, image_left + image_width * 0.55f, 0, 1.0f, 0.0f);
+        shade(0, image_height * 0.55f, 0, image_height, 0.0f, 1.0f);
+        shade(0, 0, 0, kTopBarHeight * 1.2f, 0.55f, 0.0f);
+    }
+
+    const float left = kNavWidth + kContentInset + kCardPadding;
+    float top = kHeroTextTop;
+
+    // The title: the item's logo artwork when it has one, otherwise its name.
+    const Images::Texture logo = images_->get(item->logo);
+    if (logo.handle != 0 && logo.width > 0 && logo.height > 0)
+    {
+        const float scale = std::min(kHeroLogoWidth / static_cast<float>(logo.width),
+                                     kHeroLogoHeight / static_cast<float>(logo.height));
+        const float width = logo.width * scale, height = logo.height * scale;
+        const float y = top + (kHeroLogoHeight - height); // sits on the box's lower edge
+        nvgBeginPath(vg_);
+        nvgRect(vg_, left, y, width, height);
+        nvgFillPaint(vg_, nvgImagePattern(vg_, left, y, width, height, 0, logo.handle, fade));
+        nvgFill(vg_);
+    }
+    else
+    {
+        nvgFontFace(vg_, "bold");
+        nvgFontSize(vg_, kHeroTitleSize);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_BOTTOM);
+        nvgFillColor(vg_, foreground(fade));
+        fitted_text(vg_, left, top + kHeroLogoHeight, kHeroTextWidth, item->name);
+    }
+    top += kHeroLogoHeight + units(1.2f);
+
+    // Key facts on one line: rating, year, running time, genres.
+    nvgFontSize(vg_, kHeroMetaSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+    float x = left;
+    const float middle = top + kHeroMetaSize / 2;
+    const auto fact = [&](const char *face, NVGcolor color, const std::string &text) {
+        if (text.empty())
+            return;
+        if (x > left)
+        {
+            nvgFontFace(vg_, "regular");
+            nvgFillColor(vg_, foreground(0.35f * fade));
+            x = nvgText(vg_, x + units(0.6f), middle, "\xC2\xB7", nullptr) + units(0.6f);
+        }
+        nvgFontFace(vg_, face);
+        nvgFillColor(vg_, color);
+        x = nvgText(vg_, x, middle, text.c_str(), nullptr);
+    };
+    if (!item->imdb_rating.empty())
+    {
+        // "IMDb" as a small badge, then the score.
+        nvgFontFace(vg_, "bold");
+        nvgFontSize(vg_, kHeroMetaSize * 0.8f);
+        const float badge = nvgTextBounds(vg_, 0, 0, "IMDb", nullptr, nullptr) + units(0.7f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, x, middle - units(0.7f), badge, units(1.4f), units(0.25f));
+        nvgFillColor(vg_, nvgTransRGBAf(imdb_yellow(), fade));
+        nvgFill(vg_);
+        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, fade));
+        nvgText(vg_, x + units(0.35f), middle, "IMDb", nullptr);
+        nvgFontSize(vg_, kHeroMetaSize);
+        nvgFontFace(vg_, "semibold");
+        nvgFillColor(vg_, foreground(fade));
+        x = nvgText(vg_, x + badge + units(0.5f), middle, item->imdb_rating.c_str(), nullptr);
+    }
+    fact("medium", foreground(0.8f * fade), item->release_info);
+    fact("medium", foreground(0.8f * fade), item->runtime);
+    std::string genres;
+    for (const std::string &genre : item->genres)
+        genres += (genres.empty() ? "" : ", ") + genre;
+    fact("medium", foreground(0.8f * fade), genres);
+    top += kHeroMetaSize + units(1.0f);
+
+    // The description, at most three lines.
+    if (!item->description.empty())
+    {
+        nvgFontFace(vg_, "regular");
+        nvgFontSize(vg_, kHeroDescriptionSize);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+        nvgFillColor(vg_, foreground(0.7f * fade));
+        NVGtextRow lines[4];
+        const int count = nvgTextBreakLines(vg_, item->description.c_str(), nullptr,
+                                            kHeroTextWidth, lines, 4);
+        const float line_height = kHeroDescriptionSize * 1.45f;
+        for (int index = 0; index < count && index < 3; ++index)
+        {
+            // When there is more than fits, the third line runs on into the rest of the
+            // text and is cut off with an ellipsis.
+            const bool cut = index == 2 && count > 3;
+            if (cut)
+                fitted_text(vg_, left, top, kHeroTextWidth, std::string{lines[index].start});
+            else
+                nvgText(vg_, left, top, lines[index].start, lines[index].end);
+            top += line_height;
+        }
+    }
+}
+
 void App::draw_rows()
 {
     // Rows are clipped to the area right of the navigation column.
+    // The rows live under the featured area; what scrolls above that line is cut off.
     nvgSave(vg_);
-    nvgScissor(vg_, kNavWidth, 0, kScreenWidth - kNavWidth, kScreenHeight);
-    float top = kTopBarHeight + units(0.5f) - scroll_y_;
+    nvgScissor(vg_, kNavWidth, kHeroHeight, kScreenWidth - kNavWidth, kScreenHeight - kHeroHeight);
+    float top = kHeroHeight + units(0.4f) - scroll_y_;
     for (std::size_t index = 0; index < rows_.size(); ++index)
     {
         const float height = row_height(rows_[index]);
@@ -432,6 +608,125 @@ void App::draw_rows()
         top += height;
     }
     nvgRestore(vg_);
+}
+
+void App::draw_settings()
+{
+    const float left = kNavWidth + kContentInset + kCardPadding;
+    float top = kTopBarHeight + units(0.5f);
+
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, kRowTitleSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground());
+    nvgText(vg_, left, top, "Account", nullptr);
+    top += kRowTitleSize * 1.2f + units(1.2f);
+
+    const auto line = [&](const char *face, float size, NVGcolor color, const std::string &text) {
+        nvgFontFace(vg_, face);
+        nvgFontSize(vg_, size);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+        nvgFillColor(vg_, color);
+        nvgText(vg_, left, top, text.c_str(), nullptr);
+        top += size * 1.5f;
+    };
+
+    const char *button = "Sign in";
+    if (account_.signed_in)
+    {
+        line("regular", units(1.1f), foreground(0.6f), "Signed in as");
+        line("semibold", units(1.6f), foreground(), account_.email);
+        top += units(0.4f);
+        line("regular", units(1.1f), foreground(0.6f),
+             std::to_string(account_.addons) + " add-ons installed");
+        button = "Sign out";
+    }
+    else
+    {
+        switch (account_.link)
+        {
+        case Account::Link::Idle:
+            line("regular", units(1.2f), foreground(0.75f),
+                 "Sign in to use your add-ons, library and watch progress.");
+            break;
+        case Account::Link::Requesting:
+            line("regular", units(1.2f), foreground(0.75f), "Getting a code from Stremio");
+            button = "Cancel";
+            break;
+        case Account::Link::Waiting:
+        {
+            // The page's address is shown without its scheme, as a person would type it.
+            std::string page = account_.link_page;
+            if (const auto scheme = page.find("://"); scheme != std::string::npos)
+                page.erase(0, scheme + 3);
+            line("regular", units(1.2f), foreground(0.75f),
+                 "On a phone or computer where you are signed in to Stremio, open");
+            top += units(0.3f);
+            line("semibold", units(2.0f), accent(), page);
+            top += units(0.6f);
+            line("regular", units(1.2f), foreground(0.75f), "and check that it shows this code:");
+            top += units(0.4f);
+
+            // The code, one box per character.
+            nvgFontFace(vg_, "bold");
+            nvgFontSize(vg_, units(3.2f));
+            nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+            const float box = units(4.6f), gap = units(0.8f);
+            float x = left;
+            for (const char letter : account_.code)
+            {
+                nvgBeginPath(vg_);
+                nvgRoundedRect(vg_, x, top, box, box * 1.15f, kRadius);
+                nvgFillColor(vg_, overlay(1.6f));
+                nvgFill(vg_);
+                const char text[2] = {letter, 0};
+                nvgFillColor(vg_, foreground(1.0f));
+                nvgText(vg_, x + box / 2, top + box * 1.15f / 2, text, nullptr);
+                x += box + gap;
+            }
+            top += box * 1.15f + units(1.2f);
+            line("regular", units(1.1f), foreground(0.6f),
+                 "This screen signs in by itself once you confirm it there.");
+            button = "Cancel";
+            break;
+        }
+        case Account::Link::SigningIn:
+            line("regular", units(1.2f), foreground(0.75f), "Signing in");
+            button = "Cancel";
+            break;
+        case Account::Link::Error:
+            line("regular", units(1.2f), foreground(0.75f), "Signing in did not work:");
+            line("regular", units(1.1f), foreground(0.6f), account_.error);
+            button = "Try again";
+            break;
+        }
+    }
+
+    top += units(1.0f);
+    const float width = units(11.0f), height = units(3.25f);
+    const bool focused = zone_ == Zone::Content;
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, left, top, width, height, height / 2);
+    nvgFillColor(vg_, focused ? accent() : overlay(2.0f));
+    nvgFill(vg_);
+    if (focused)
+        focus_ring(vg_, left, top, width, height, height / 2);
+    nvgFontFace(vg_, "semibold");
+    nvgFontSize(vg_, units(1.15f));
+    nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    nvgFillColor(vg_, foreground(1.0f));
+    nvgText(vg_, left + width / 2, top + height / 2, button, nullptr);
+}
+
+void App::draw_unbuilt_tab()
+{
+    nvgFontFace(vg_, "regular");
+    nvgFontSize(vg_, units(1.3f));
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground(0.5f));
+    const std::string text = std::string{kTabs[selected_tab_].label} + " is not built yet.";
+    nvgText(vg_, kNavWidth + kContentInset + kCardPadding, kTopBarHeight + units(0.5f),
+            text.c_str(), nullptr);
 }
 
 void App::draw(int width, int height)
@@ -445,7 +740,19 @@ void App::draw(int width, int height)
     nvgFillColor(vg_, background());
     nvgFill(vg_);
 
-    draw_rows();
+    switch (kTabs[selected_tab_].icon)
+    {
+    case Icon::Board:
+        draw_hero();
+        draw_rows();
+        break;
+    case Icon::Settings:
+        draw_settings();
+        break;
+    default:
+        draw_unbuilt_tab();
+        break;
+    }
     draw_top_bar();
     draw_navigation();
 

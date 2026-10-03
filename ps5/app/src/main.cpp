@@ -22,6 +22,7 @@
 #include "nanovg.h"
 #include "nanovg_gl.h"
 
+#include "account_data.hpp"
 #include "app.hpp"
 #include "board_data.hpp"
 #include "pad.hpp"
@@ -36,6 +37,12 @@ extern "C"
                                         std::size_t capacity);
     std::size_t stremio_core_last_error(char *out, std::size_t capacity);
     std::int32_t stremio_core_fetch_file(const char *url, const char *path);
+    void stremio_core_board_load_range(std::uint32_t start, std::uint32_t end);
+    void stremio_core_sign_in_start(void);
+    void stremio_core_sign_in_cancel(void);
+    void stremio_core_sign_out(void);
+    void stremio_core_account_advance(void);
+    std::size_t stremio_core_account(char *out, std::size_t capacity);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
 }
 
@@ -261,6 +268,10 @@ void refresh_board(ui::App &app, std::vector<char> &buffer)
     if (ui::parse_board(std::string_view{buffer.data(), length}, rows))
         app.set_board(std::move(rows));
 }
+
+// How many board rows are requested at a time, and how far ahead of the focus.
+constexpr std::uint32_t kRowBatch = 8;
+constexpr std::uint32_t kRowsAhead = 4;
 } // namespace
 
 int main()
@@ -292,6 +303,24 @@ int main()
         stremio_core_fetch_file(address.c_str(), file.c_str());
     });
 
+    app.set_intent_handler([](ui::Intent intent) {
+        switch (intent)
+        {
+        case ui::Intent::SignIn:
+            stremio_core_sign_in_start();
+            break;
+        case ui::Intent::CancelSignIn:
+            stremio_core_sign_in_cancel();
+            break;
+        case ui::Intent::SignOut:
+            stremio_core_sign_out();
+            break;
+        }
+    });
+
+    // Rows of the board requested from the core so far; more are requested as the focus
+    // nears the last of them.
+    std::uint32_t rows_requested = 0;
     if (stremio_core_init(kStorageFolder) != 0)
     {
         char error[256] = {};
@@ -300,7 +329,8 @@ int main()
     }
     else
     {
-        stremio_core_load_board(8);
+        stremio_core_load_board(kRowBatch);
+        rows_requested = kRowBatch;
         log_line("core started");
     }
 
@@ -309,6 +339,9 @@ int main()
 
     std::vector<char> text(2 << 20);
     double previous = seconds_now();
+    double account_checked = 0;
+    ui::Account account;
+    bool account_known = false;
     unsigned long frames = 0;
     for (;;)
     {
@@ -316,8 +349,41 @@ int main()
         bool changed = false;
         while (stremio_core_poll_event(text.data(), text.size()) != 0)
             changed = true;
+
+        // The account is looked at after every change and every two seconds, which is also
+        // when a sign-in in progress is moved along (see the bridge's account.rs).
+        if (changed || seconds_now() - account_checked > 2.0)
+        {
+            account_checked = seconds_now();
+            stremio_core_account_advance();
+            const std::size_t length = stremio_core_account(text.data(), text.size());
+            ui::Account latest;
+            if (length != 0 && length < text.size() &&
+                ui::parse_account(std::string_view{text.data(), length}, latest))
+            {
+                // Signing in or out, or the account's add-ons arriving, changes which
+                // catalogs the board has: it is loaded afresh.
+                if (account_known &&
+                    (latest.signed_in != account.signed_in || latest.addons != account.addons))
+                {
+                    log_line("account changed: signed %s, %d add-ons",
+                             latest.signed_in ? "in" : "out", latest.addons);
+                    stremio_core_load_board(kRowBatch);
+                    rows_requested = kRowBatch;
+                    changed = true;
+                }
+                account = latest;
+                account_known = true;
+                app.set_account(account);
+            }
+        }
         if (changed)
             refresh_board(app, text);
+        if (rows_requested != 0 && app.focused_row() + kRowsAhead >= rows_requested)
+        {
+            stremio_core_board_load_range(rows_requested, rows_requested + kRowBatch);
+            rows_requested += kRowBatch;
+        }
 
         const double now = seconds_now();
         const float elapsed = static_cast<float>(now - previous);

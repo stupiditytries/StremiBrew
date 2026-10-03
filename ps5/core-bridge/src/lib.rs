@@ -3,6 +3,7 @@
 //! The app starts the core once, sends it actions as JSON, drains the events it emits, and
 //! reads model state as JSON. All functions may be called from any thread.
 
+mod account;
 mod details;
 mod env;
 mod model;
@@ -16,7 +17,7 @@ use futures::executor::block_on;
 use futures::{future, StreamExt};
 
 use stremio_core::constants::{
-    DISMISSED_EVENTS_STORAGE_KEY, LIBRARY_RECENT_STORAGE_KEY, LIBRARY_STORAGE_KEY,
+    GENRES_LINK_CATEGORY, IMDB_LINK_CATEGORY, DISMISSED_EVENTS_STORAGE_KEY, LIBRARY_RECENT_STORAGE_KEY, LIBRARY_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY, PROFILE_STORAGE_KEY, SEARCH_HISTORY_STORAGE_KEY,
     STREAMING_SERVER_URLS_STORAGE_KEY, STREAMS_STORAGE_KEY,
 };
@@ -320,6 +321,13 @@ struct BoardItem<'a> {
     poster: Option<std::borrow::Cow<'a, str>>,
     poster_shape: &'a stremio_core::types::resource::PosterShape,
     release_info: Option<&'a str>,
+    // What the featured area at the top of the board shows about the focused item.
+    background: Option<&'a str>,
+    logo: Option<&'a str>,
+    description: Option<&'a str>,
+    runtime: Option<&'a str>,
+    imdb_rating: Option<&'a str>,
+    genres: Vec<&'a str>,
 }
 
 /// Stremio's poster service offers each poster in three sizes and catalogs link the
@@ -381,6 +389,22 @@ pub extern "C" fn stremio_core_board_rows(
                             poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
                             poster_shape: shape.unwrap_or(&item.poster_shape),
                             release_info: item.release_info.as_deref(),
+                            background: item.background.as_ref().map(|url| url.as_str()),
+                            logo: item.logo.as_ref().map(|url| url.as_str()),
+                            description: item.description.as_deref(),
+                            runtime: item.runtime.as_deref(),
+                            imdb_rating: item
+                                .links
+                                .iter()
+                                .find(|link| link.category == IMDB_LINK_CATEGORY)
+                                .map(|link| link.name.as_str()),
+                            genres: item
+                                .links
+                                .iter()
+                                .filter(|link| link.category == GENRES_LINK_CATEGORY)
+                                .map(|link| link.name.as_str())
+                                .take(3)
+                                .collect(),
                         })
                         .collect();
                     ("ready", None, items)
@@ -465,5 +489,67 @@ pub extern "C" fn stremio_core_details(out: *mut c_char, capacity: usize) -> usi
             set_error(error.to_string());
             0
         }
+    }
+}
+
+/// Starts signing in: asks Stremio for a link code, which `stremio_core_account` then
+/// reports. Call `stremio_core_account_advance` every couple of seconds while it is shown.
+#[no_mangle]
+pub extern "C" fn stremio_core_sign_in_start() {
+    if let Some(runtime) = RUNTIME.get() {
+        account::start_link(runtime);
+    }
+}
+
+/// Abandons a sign-in in progress.
+#[no_mangle]
+pub extern "C" fn stremio_core_sign_in_cancel() {
+    if let Some(runtime) = RUNTIME.get() {
+        account::cancel_link(runtime);
+    }
+}
+
+/// Checks whether the link code has been entered and signs in once it has.
+#[no_mangle]
+pub extern "C" fn stremio_core_account_advance() {
+    if let Some(runtime) = RUNTIME.get() {
+        account::advance(runtime);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn stremio_core_sign_out() {
+    if let Some(runtime) = RUNTIME.get() {
+        account::sign_out(runtime);
+    }
+}
+
+/// Serialises the account's state for the UI as JSON (see `account::Account`). Returns the
+/// JSON's length, or 0 on failure.
+#[no_mangle]
+pub extern "C" fn stremio_core_account(out: *mut c_char, capacity: usize) -> usize {
+    let Some(runtime) = RUNTIME.get() else {
+        return 0;
+    };
+    let Ok(model) = runtime.model() else {
+        return 0;
+    };
+    match serde_json::to_string(&account::account(&model)) {
+        Ok(json) => copy_out(&json, out, capacity),
+        Err(_) => 0,
+    }
+}
+
+/// Requests the board's rows `start` up to (not including) `end`. Rows already loaded are
+/// kept; the UI calls this as the focus moves down the board.
+#[no_mangle]
+pub extern "C" fn stremio_core_board_load_range(start: u32, end: u32) {
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.dispatch(RuntimeAction {
+            field: Some(Ps5ModelField::Board),
+            action: Action::CatalogsWithExtra(ActionCatalogsWithExtra::LoadRange(
+                start as usize..end as usize,
+            )),
+        });
     }
 }

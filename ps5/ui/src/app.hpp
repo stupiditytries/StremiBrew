@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "account_data.hpp"
 #include "board_data.hpp"
 
 struct NVGcontext;
@@ -27,6 +28,14 @@ enum class Button
     Back,
 };
 
+// Things the user asks for that the host carries out.
+enum class Intent
+{
+    SignIn,       // start signing in (ask for a link code)
+    CancelSignIn, // abandon the sign-in in progress
+    SignOut,
+};
+
 class App
 {
   public:
@@ -38,6 +47,13 @@ class App
     // Where images that are not in the cache folder yet are requested (see Images).
     void set_image_fetcher(
         std::function<void(const std::string &address, const std::string &file)> fetcher);
+    void set_account(Account account);
+    void set_intent_handler(std::function<void(Intent)> handler);
+    // The board row the focus is on, so the host can load rows ahead of it.
+    std::size_t focused_row() const
+    {
+        return row_focus_;
+    }
     void press(Button button);
     void update(float seconds);
     // Draws one frame into a framebuffer of the given size in pixels.
@@ -49,21 +65,29 @@ class App
         Navigation,
         Search,
         Rows,
+        Content, // the one button of a screen that is not the board
     };
 
     void draw_navigation();
     void draw_top_bar();
     void draw_rows();
+    void draw_hero();
+    const BoardItem *focused_item() const;
     void draw_row(const BoardRow &row, std::size_t index, float top);
     float row_height(const BoardRow &row) const;
     float card_width(const BoardRow &row) const;
     float poster_height(const BoardRow &row) const;
     float row_top(std::size_t index) const;
     void follow_focus();
+    void enter_tab();
+    void draw_settings();
+    void draw_unbuilt_tab();
 
     NVGcontext *vg_;
     std::unique_ptr<Images> images_;
     std::vector<BoardRow> rows_;
+    Account account_;
+    std::function<void(Intent)> intent_;
 
     Zone zone_ = Zone::Rows;
     int navigation_focus_ = 0; // which navigation button the focus is on
@@ -75,6 +99,9 @@ class App
     float scroll_y_ = 0, scroll_y_target_ = 0;
     std::vector<float> scroll_x_, scroll_x_target_;
     float focus_pulse_ = 0; // 0..1, eases to 1 after the focus moves
+    // The featured area fades in afresh whenever a different item takes the focus.
+    std::string hero_item_;
+    float hero_fade_ = 0;
     // How visible each navigation button's label and highlight are, 0..1. A tab's name
     // shows only while the focus is on it, and fades in and out as the focus moves.
     static constexpr int kMaxTabs = 8;

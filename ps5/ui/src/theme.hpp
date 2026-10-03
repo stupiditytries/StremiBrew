@@ -68,4 +68,18 @@ inline constexpr float kCardTitleSize = units(1.0f);
 inline constexpr float kCardTitleHeight = units(2.2f);
 inline constexpr float kContentInset = units(1.0f);
 inline constexpr float kFocusScale = 1.05f;
+
+// The featured area at the top of the board: the focused item's artwork and details.
+inline constexpr float kHeroHeight = units(24.5f);
+inline constexpr float kHeroTextTop = units(6.6f);
+inline constexpr float kHeroTextWidth = units(34.0f);
+inline constexpr float kHeroLogoWidth = units(20.0f);
+inline constexpr float kHeroLogoHeight = units(6.4f);
+inline constexpr float kHeroTitleSize = units(2.6f);
+inline constexpr float kHeroMetaSize = units(1.1f);
+inline constexpr float kHeroDescriptionSize = units(1.05f);
+inline NVGcolor imdb_yellow()
+{
+    return nvgRGB(245, 197, 24);
+}
 } // namespace ui::theme

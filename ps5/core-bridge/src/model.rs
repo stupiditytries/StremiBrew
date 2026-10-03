@@ -4,8 +4,10 @@
 
 use stremio_core::models::catalogs_with_extra::CatalogsWithExtra;
 use stremio_core::models::ctx::Ctx;
+use stremio_core::models::link::Link;
 use stremio_core::models::meta_details::MetaDetails;
 use stremio_core::runtime::Effects;
+use stremio_core::types::api::LinkAuthKey;
 use stremio_core::types::events::DismissedEventsBucket;
 use stremio_core::types::library::LibraryBucket;
 use stremio_core::types::notifications::NotificationsBucket;
@@ -21,6 +23,8 @@ use crate::env::Ps5Env;
 #[model(Ps5Env)]
 pub struct Ps5Model {
     pub ctx: Ctx,
+    /// Signing in with a link code (see account.rs).
+    pub auth_link: Link<LinkAuthKey>,
     pub board: CatalogsWithExtra,
     pub meta_details: MetaDetails,
 }
@@ -45,6 +49,7 @@ impl Ps5Model {
                 search_history,
                 dismissed_events,
             ),
+            auth_link: Link::default(),
             board: CatalogsWithExtra::default(),
             meta_details: MetaDetails::default(),
         };

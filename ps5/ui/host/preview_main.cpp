@@ -3,9 +3,11 @@
 //   stremio_preview <board.json> <image cache folder> <font folder> [options]
 //     --shot <file.png>   draw without showing a window, save the last frame and exit
 //     --keys <letters>    button presses to apply first: u d l r (directions), a (accept),
-//                         b (back); the screen settles between presses
+//                         b (back), s (the sign-in code gets entered elsewhere);
+//                         the screen settles between presses
 //
-// In a window the arrow keys, Enter and Backspace are the buttons.
+// In a window the arrow keys, Enter and Backspace are the buttons, and S plays the part
+// of the sign-in code being entered on another device.
 
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +34,40 @@
 namespace
 {
 ui::App *app = nullptr;
+ui::Account account;
+
+// What the console's host does with the core, acted out with canned data.
+void on_intent(ui::Intent intent)
+{
+    switch (intent)
+    {
+    case ui::Intent::SignIn:
+        account.link = ui::Account::Link::Waiting;
+        account.code = "7K2P";
+        account.link_page = "https://link.stremio.com/7K2P";
+        break;
+    case ui::Intent::CancelSignIn:
+        account.link = ui::Account::Link::Idle;
+        break;
+    case ui::Intent::SignOut:
+        account = ui::Account{};
+        account.addons = 6;
+        break;
+    }
+    app->set_account(account);
+}
+
+// Plays the part of the code being entered on another device.
+void complete_sign_in()
+{
+    if (account.link != ui::Account::Link::Waiting)
+        return;
+    account = ui::Account{};
+    account.signed_in = true;
+    account.email = "you@example.com";
+    account.addons = 14;
+    app->set_account(account);
+}
 
 void on_key(GLFWwindow *window, int key, int, int action, int)
 {
@@ -56,6 +92,9 @@ void on_key(GLFWwindow *window, int key, int, int action, int)
         break;
     case GLFW_KEY_BACKSPACE:
         app->press(ui::Button::Back);
+        break;
+    case GLFW_KEY_S:
+        complete_sign_in();
         break;
     case GLFW_KEY_ESCAPE:
         glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -160,6 +199,9 @@ int main(int argc, char **argv)
         ui::App instance{vg, argv[3], argv[2]};
         app = &instance;
         instance.set_board(std::move(rows));
+        account.addons = 6;
+        instance.set_account(account);
+        instance.set_intent_handler(on_intent);
         glfwSetKeyCallback(window, on_key);
 
         const auto frame = [&](float seconds) {
@@ -184,7 +226,9 @@ int main(int argc, char **argv)
             for (const char letter : keys)
             {
                 ui::Button button;
-                if (button_for(letter, button))
+                if (letter == 's')
+                    complete_sign_in();
+                else if (button_for(letter, button))
                     instance.press(button);
                 settle();
             }

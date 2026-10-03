@@ -21,6 +21,14 @@ struct BoardItem
     std::string type;
     std::string name;
     std::string poster; // image address; empty when the add-on gave none
+    // Shown in the featured area while the item has the focus. Any may be empty.
+    std::string background;
+    std::string logo;
+    std::string description;
+    std::string release_info;
+    std::string runtime;
+    std::string imdb_rating;
+    std::vector<std::string> genres;
 };
 
 struct BoardRow

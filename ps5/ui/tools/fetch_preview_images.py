@@ -29,21 +29,22 @@ def main() -> None:
     fetched = skipped = failed = 0
     for row in board:
         for item in row["items"][:per_row]:
-            url = item.get("poster")
-            if not url:
-                continue
-            target = cache / cache_name(url)
-            if target.exists():
-                skipped += 1
-                continue
-            try:
-                request = urllib.request.Request(url, headers={"User-Agent": "stremio-ps5-preview"})
-                with urllib.request.urlopen(request, timeout=20) as response:
-                    target.write_bytes(response.read())
-                fetched += 1
-            except OSError as error:
-                failed += 1
-                print(f"failed: {url}: {error}")
+            for url in (item.get("poster"), item.get("background"), item.get("logo")):
+                if not url:
+                    continue
+                target = cache / cache_name(url)
+                if target.exists():
+                    skipped += 1
+                    continue
+                try:
+                    request = urllib.request.Request(
+                        url, headers={"User-Agent": "stremio-ps5-preview"})
+                    with urllib.request.urlopen(request, timeout=20) as response:
+                        target.write_bytes(response.read())
+                    fetched += 1
+                except OSError as error:
+                    failed += 1
+                    print(f"failed: {url}: {error}")
     print(f"fetched {fetched}, already present {skipped}, failed {failed}")
 
 

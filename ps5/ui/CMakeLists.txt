@@ -40,6 +40,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
 endif()
 
 add_library(stremio_ui STATIC
+    src/account_data.cpp
     src/app.cpp
     src/board_data.cpp
     src/icons.cpp

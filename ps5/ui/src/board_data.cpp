@@ -49,9 +49,24 @@ bool parse_board(std::string_view json, std::vector<BoardRow> &rows)
                 item.id = source.value("id", std::string{});
                 item.type = source.value("type", std::string{});
                 item.name = source.value("name", std::string{});
-                if (const auto poster = source.find("poster");
-                    poster != source.end() && poster->is_string())
-                    item.poster = poster->get<std::string>();
+                const auto text = [&](const char *key) {
+                    const auto found = source.find(key);
+                    return found != source.end() && found->is_string()
+                               ? found->get<std::string>()
+                               : std::string{};
+                };
+                item.poster = text("poster");
+                item.background = text("background");
+                item.logo = text("logo");
+                item.description = text("description");
+                item.release_info = text("releaseInfo");
+                item.runtime = text("runtime");
+                item.imdb_rating = text("imdbRating");
+                if (const auto genres = source.find("genres");
+                    genres != source.end() && genres->is_array())
+                    for (const auto &genre : *genres)
+                        if (genre.is_string())
+                            item.genres.push_back(genre.get<std::string>());
                 if (row.items.empty())
                     row.shape = shape_of(source.value("posterShape", std::string{"poster"}));
                 row.items.push_back(std::move(item));
