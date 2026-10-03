@@ -1,14 +1,21 @@
 // Images from the web: posters, backgrounds and title logos. Downloaded images live in a
 // folder, one file per image, named by a hash of the image's address; this class asks the
-// host to download the ones that are missing, turns the files into textures as they are
-// needed, and lets go of textures that have not been drawn for a while.
+// host to download the ones that are missing, decodes the files on worker threads, turns
+// the results into textures a few at a time, and lets go of textures that have not been
+// drawn for a while.
 
 #pragma once
 
+#include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 struct NVGcontext;
 
@@ -28,8 +35,9 @@ class Images
     enum class State
     {
         Ready,       // the texture can be drawn
-        Pending,     // being downloaded, or waiting its turn to be decoded
-        Unavailable, // no address, the download failed, or the file is not an image
+        Pending,     // being downloaded or decoded
+        Unavailable, // no address, the download failed, the file is not an image, or the
+                     // image has nothing visible in it
     };
 
     struct Texture
@@ -38,11 +46,14 @@ class Images
         int handle = 0; // valid when `state` is Ready
         int width = 0;
         int height = 0;
+        // The part of the image that is not fully transparent (the whole image for one
+        // without transparency). A title logo is placed by this, so the empty margin
+        // many of them carry does not push the artwork out of line.
+        int content_x = 0, content_y = 0, content_width = 0, content_height = 0;
     };
 
-    // The texture for `address`, decoding it on first use. At most `kDecodesPerFrame`
-    // images are decoded between calls to `begin_frame`, so a screen full of new images
-    // fills in over a few frames instead of stalling one.
+    // The texture for `address`. The first request starts the work; the texture is ready
+    // some frames later.
     Texture get(const std::string &address);
     // Starts downloading `address` if it is not in the folder, without making a texture:
     // for images that are likely to be wanted soon.
@@ -57,10 +68,11 @@ class Images
     void set_fetcher(Fetch fetch, Failed failed);
 
   private:
-    static constexpr int kDecodesPerFrame = 3;
+    static constexpr int kUploadsPerFrame = 2; // decoded images turned into textures a frame
+    static constexpr int kWorkers = 2;
     // Textures are kept up to this many bytes; beyond it, those not drawn recently go.
     static constexpr std::size_t kTextureBudget = std::size_t{320} << 20;
-    static constexpr long kKeepFrames = 120;   // never drop a texture drawn this recently
+    static constexpr long kKeepFrames = 120;     // never drop a texture drawn this recently
     static constexpr long kLookEveryFrames = 10; // how often to look for a pending file
 
     struct Entry
@@ -73,18 +85,40 @@ class Images
     {
         long look_again = 0; // the frame on which to look for the file again
     };
+    struct Job
+    {
+        std::string address;
+        std::string file;
+    };
+    struct Decoded
+    {
+        std::string address;
+        std::vector<unsigned char> pixels; // RGBA; empty when the file could not be used
+        int width = 0, height = 0;
+        int content_x = 0, content_y = 0, content_width = 0, content_height = 0;
+    };
 
     bool request(const std::string &address, const std::string &file);
     void trim();
+    void work();
+    static Decoded decode(const Job &job);
 
     NVGcontext *context_;
     std::string folder_;
-    int decodes_left_ = kDecodesPerFrame;
     long frame_ = 0;
     std::size_t texture_bytes_ = 0;
     std::unordered_map<std::string, Entry> entries_;
     std::unordered_map<std::string, Download> downloads_;
+    std::unordered_set<std::string> decoding_; // handed to the workers, not back yet
     Fetch fetch_;
     Failed failed_;
+
+    // Shared with the worker threads.
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    std::deque<Job> jobs_;
+    std::deque<Decoded> decoded_;
+    bool stopping_ = false;
+    std::vector<std::thread> workers_;
 };
 } // namespace ui

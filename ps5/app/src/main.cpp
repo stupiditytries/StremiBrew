@@ -25,6 +25,7 @@
 #include "account_data.hpp"
 #include "app.hpp"
 #include "board_data.hpp"
+#include "details_data.hpp"
 #include "pad.hpp"
 #include "theme.hpp"
 
@@ -45,6 +46,8 @@ extern "C"
     void stremio_core_sign_out(void);
     void stremio_core_account_advance(void);
     std::size_t stremio_core_account(char *out, std::size_t capacity);
+    std::int32_t stremio_core_load_details(const char *type, const char *id, const char *video);
+    std::size_t stremio_core_details(char *out, std::size_t capacity);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
     int sceKernelDebugOutText(int channel, const char *text);
 }
@@ -331,6 +334,20 @@ int main()
         }
     });
 
+    app.set_title_handler({
+        [](const std::string &type, const std::string &id) {
+            stremio_core_load_details(type.c_str(), id.c_str(), nullptr);
+        },
+        [](const std::string &type, const std::string &id, const std::string &video) {
+            stremio_core_load_details(type.c_str(), id.c_str(), video.c_str());
+        },
+        [] {},
+        [](const ui::Stream &stream, const std::string &title) {
+            // The player is the next thing to be built; for now the choice is recorded.
+            log_line("play requested: \"%s\" from %s", title.c_str(), stream.addon.c_str());
+        },
+    });
+
     // Rows of the board requested from the core so far; more are requested as the focus
     // nears the last of them.
     std::uint32_t rows_requested = 0;
@@ -405,6 +422,16 @@ int main()
         stage("board");
         if (changed)
             refresh_board(app, text);
+        // While a title's page is open, its details are re-read after every change (the
+        // add-ons answer one by one).
+        if (changed && app.title_open())
+        {
+            const std::size_t length = stremio_core_details(text.data(), text.size());
+            ui::Details details;
+            if (length != 0 && length < text.size() &&
+                ui::parse_details(std::string_view{text.data(), length}, details))
+                app.set_details(std::move(details));
+        }
         if (rows_requested != 0 && app.focused_catalog() + kRowsAhead >= rows_requested)
         {
             stremio_core_board_load_range(rows_requested, rows_requested + kRowBatch);

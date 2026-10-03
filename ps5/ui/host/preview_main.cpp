@@ -57,6 +57,29 @@ void on_intent(ui::Intent intent)
     app->set_account(account);
 }
 
+std::string data_folder; // where the sample files are
+
+std::string read_text(const std::string &path)
+{
+    std::ifstream file{path, std::ios::binary};
+    std::stringstream text;
+    text << file.rdbuf();
+    return text.str();
+}
+
+// A title's page shows the sample film or the sample series, whichever kind was opened.
+void show_sample_details(const std::string &type, const std::string &id)
+{
+    ui::Details details;
+    const std::string file = type == "series" ? "details-series.json" : "details-movie.json";
+    if (ui::parse_details(read_text(data_folder + "/" + file), details))
+    {
+        // The sample is of one particular title; it is passed off as the one opened.
+        details.id = id;
+        app->set_details(std::move(details));
+    }
+}
+
 // Plays the part of the code being entered on another device.
 void complete_sign_in()
 {
@@ -202,6 +225,20 @@ int main(int argc, char **argv)
         account.addons = 6;
         instance.set_account(account);
         instance.set_intent_handler(on_intent);
+        data_folder = std::string{argv[1]};
+        data_folder.erase(data_folder.find_last_of("/\\") == std::string::npos
+                              ? 0
+                              : data_folder.find_last_of("/\\"));
+        instance.set_title_handler({
+            [](const std::string &type, const std::string &id) { show_sample_details(type, id); },
+            [](const std::string &type, const std::string &id, const std::string &) {
+                show_sample_details(type, id);
+            },
+            [] {},
+            [](const ui::Stream &stream, const std::string &title) {
+                std::printf("play \"%s\": %s\n", title.c_str(), stream.url.c_str());
+            },
+        });
         glfwSetKeyCallback(window, on_key);
 
         const auto frame = [&](float seconds) {

@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 #include "nanovg.h"
+#include "stb_image.h"
 #include "webp/decode.h"
 
 namespace ui
@@ -59,24 +59,151 @@ bool is_webp(const std::vector<unsigned char> &bytes)
     return bytes.size() > 12 && std::memcmp(bytes.data(), "RIFF", 4) == 0 &&
            std::memcmp(bytes.data() + 8, "WEBP", 4) == 0;
 }
+
+// An image's alpha below this counts as nothing being there.
+constexpr unsigned char kVisibleAlpha = 24;
 } // namespace
 
 Images::Images(NVGcontext *context, std::string cache_folder)
     : context_{context}, folder_{std::move(cache_folder)}
 {
+    for (int index = 0; index < kWorkers; ++index)
+        workers_.emplace_back([this] { work(); });
 }
 
 Images::~Images()
 {
+    {
+        const std::lock_guard<std::mutex> lock{mutex_};
+        stopping_ = true;
+    }
+    wake_.notify_all();
+    for (std::thread &worker : workers_)
+        worker.join();
     for (const auto &[address, entry] : entries_)
         if (entry.texture.handle != 0)
             nvgDeleteImage(context_, entry.texture.handle);
 }
 
+// Reads and decodes one file. Runs on a worker thread, so it touches nothing of the
+// class's and nothing of the drawing library's.
+Images::Decoded Images::decode(const Job &job)
+{
+    Decoded result;
+    result.address = job.address;
+    const std::vector<unsigned char> bytes = read_file(job.file);
+    if (bytes.empty())
+        return result;
+
+    int width = 0, height = 0;
+    unsigned char *pixels = nullptr;
+    const bool webp = is_webp(bytes);
+    if (webp)
+    {
+        // Stremio's image service sends WebP, which the general decoder cannot read.
+        pixels = WebPDecodeRGBA(bytes.data(), bytes.size(), &width, &height);
+    }
+    else
+    {
+        int components = 0;
+        pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width,
+                                       &height, &components, 4);
+    }
+    if (pixels == nullptr || width <= 0 || height <= 0)
+        return result;
+
+    // The bounds of what is visible. A file that decodes to nothing but transparency (a
+    // placeholder some services send for a logo they do not have) is not used at all.
+    int left = width, top = height, right = -1, bottom = -1;
+    for (int y = 0; y < height; ++y)
+    {
+        const unsigned char *row = pixels + static_cast<std::size_t>(y) * width * 4;
+        for (int x = 0; x < width; ++x)
+            if (row[x * 4 + 3] > kVisibleAlpha)
+            {
+                if (x < left)
+                    left = x;
+                if (x > right)
+                    right = x;
+                if (y < top)
+                    top = y;
+                bottom = y;
+            }
+    }
+    if (right >= left && bottom >= top)
+    {
+        result.width = width;
+        result.height = height;
+        result.content_x = left;
+        result.content_y = top;
+        result.content_width = right - left + 1;
+        result.content_height = bottom - top + 1;
+        result.pixels.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
+    }
+    if (webp)
+        WebPFree(pixels);
+    else
+        stbi_image_free(pixels);
+    return result;
+}
+
+void Images::work()
+{
+    for (;;)
+    {
+        Job job;
+        {
+            std::unique_lock<std::mutex> lock{mutex_};
+            wake_.wait(lock, [this] { return stopping_ || !jobs_.empty(); });
+            if (stopping_)
+                return;
+            job = std::move(jobs_.front());
+            jobs_.pop_front();
+        }
+        Decoded result = decode(job);
+        const std::lock_guard<std::mutex> lock{mutex_};
+        decoded_.push_back(std::move(result));
+    }
+}
+
 void Images::begin_frame()
 {
-    decodes_left_ = kDecodesPerFrame;
     ++frame_;
+
+    // Decoded images become textures here, on the drawing thread, a few each frame.
+    for (int count = 0; count < kUploadsPerFrame; ++count)
+    {
+        Decoded image;
+        {
+            const std::lock_guard<std::mutex> lock{mutex_};
+            if (decoded_.empty())
+                break;
+            image = std::move(decoded_.front());
+            decoded_.pop_front();
+        }
+        decoding_.erase(image.address);
+        Entry entry;
+        entry.last_used = frame_;
+        if (!image.pixels.empty())
+            entry.texture.handle = nvgCreateImageRGBA(context_, image.width, image.height,
+                                                      NVG_IMAGE_GENERATE_MIPMAPS, image.pixels.data());
+        if (entry.texture.handle != 0)
+        {
+            entry.texture.state = State::Ready;
+            entry.texture.width = image.width;
+            entry.texture.height = image.height;
+            entry.texture.content_x = image.content_x;
+            entry.texture.content_y = image.content_y;
+            entry.texture.content_width = image.content_width;
+            entry.texture.content_height = image.content_height;
+            // Four bytes a pixel, plus a third for the smaller copies used when drawn small.
+            entry.bytes = static_cast<std::size_t>(image.width) * image.height * 16 / 3;
+            texture_bytes_ += entry.bytes;
+        }
+        // An image that could not be used is remembered too, as unavailable.
+        entries_[image.address] = entry;
+    }
+
     if (texture_bytes_ > kTextureBudget)
         trim();
 }
@@ -124,7 +251,8 @@ bool Images::request(const std::string &address, const std::string &file)
 
 void Images::prefetch(const std::string &address)
 {
-    if (address.empty() || entries_.count(address) != 0 || downloads_.count(address) != 0)
+    if (address.empty() || entries_.count(address) != 0 || downloads_.count(address) != 0 ||
+        decoding_.count(address) != 0)
         return;
     const std::string file = folder_ + "/" + image_cache_name(address);
     if (file_exists(file))
@@ -145,8 +273,9 @@ Images::Texture Images::get(const std::string &address)
         found->second.last_used = frame_;
         return found->second.texture;
     }
-    const Texture pending{State::Pending, 0, 0, 0};
-    if (decodes_left_ == 0)
+    Texture pending;
+    pending.state = State::Pending;
+    if (decoding_.count(address) != 0)
         return pending;
 
     // An image that is still downloading is looked for every so often, not every frame.
@@ -154,8 +283,7 @@ Images::Texture Images::get(const std::string &address)
     if (download != downloads_.end() && frame_ < download->second.look_again)
         return pending;
     const std::string file = folder_ + "/" + image_cache_name(address);
-    std::vector<unsigned char> bytes = read_file(file);
-    if (bytes.empty())
+    if (!file_exists(file))
     {
         if (!request(address, file))
         {
@@ -166,36 +294,14 @@ Images::Texture Images::get(const std::string &address)
         return pending;
     }
     downloads_.erase(address);
-    --decodes_left_;
 
-    Entry entry;
-    entry.last_used = frame_;
-    const int flags = NVG_IMAGE_GENERATE_MIPMAPS;
-    if (is_webp(bytes))
+    // The file is there: a worker reads and decodes it.
+    decoding_.insert(address);
     {
-        // Stremio's image service sends WebP, which the drawing library cannot read.
-        int width = 0, height = 0;
-        if (std::uint8_t *pixels = WebPDecodeRGBA(bytes.data(), bytes.size(), &width, &height))
-        {
-            entry.texture.handle = nvgCreateImageRGBA(context_, width, height, flags, pixels);
-            WebPFree(pixels);
-        }
+        const std::lock_guard<std::mutex> lock{mutex_};
+        jobs_.push_back(Job{address, file});
     }
-    else
-    {
-        entry.texture.handle =
-            nvgCreateImageMem(context_, flags, bytes.data(), static_cast<int>(bytes.size()));
-    }
-    if (entry.texture.handle != 0)
-    {
-        nvgImageSize(context_, entry.texture.handle, &entry.texture.width, &entry.texture.height);
-        entry.texture.state = State::Ready;
-        // Four bytes a pixel, plus a third for the smaller copies used when drawn small.
-        entry.bytes = static_cast<std::size_t>(entry.texture.width) * entry.texture.height * 16 / 3;
-        texture_bytes_ += entry.bytes;
-    }
-    // A file that is not an image is remembered too, so it is not decoded again every frame.
-    entries_.emplace(address, entry);
-    return entry.texture;
+    wake_.notify_one();
+    return pending;
 }
 } // namespace ui

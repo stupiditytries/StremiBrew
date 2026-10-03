@@ -43,6 +43,9 @@ add_library(stremio_ui STATIC
     src/account_data.cpp
     src/app.cpp
     src/board_data.cpp
+    src/details_data.cpp
+    src/details_screen.cpp
+    src/draw_util.cpp
     src/icons.cpp
     src/images.cpp
     "${third_party}/nanovg/nanovg.c")

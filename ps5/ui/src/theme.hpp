@@ -84,6 +84,8 @@ inline constexpr float kHeroDescriptionSize = units(1.05f);
 inline constexpr float kHeroDwell = 0.30f;
 inline constexpr float kHeroFadeOut = 0.16f;
 inline constexpr float kHeroFadeIn = 0.40f;
+// Seconds to wait for a title's logo before writing its name out instead.
+inline constexpr float kHeroLogoWait = 2.5f;
 inline NVGcolor imdb_yellow()
 {
     return nvgRGB(245, 197, 24);

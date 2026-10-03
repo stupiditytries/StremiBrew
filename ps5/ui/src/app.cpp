@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "details_screen.hpp"
+#include "draw_util.hpp"
 #include "icons.hpp"
 #include "images.hpp"
 #include "nanovg.h"
@@ -26,65 +28,6 @@ constexpr Tab kTabs[] = {
 };
 constexpr int kTabCount = static_cast<int>(sizeof kTabs / sizeof kTabs[0]);
 
-// Moves `value` towards `target`, covering most of the distance in about a tenth of a
-// second whatever the frame rate.
-float eased(float value, float target, float seconds)
-{
-    return target + (value - target) * std::exp(-seconds * 14.0f);
-}
-
-// Draws one line of text, cut short with an ellipsis when it is wider than `width`.
-void fitted_text(NVGcontext *vg, float x, float y, float width, const std::string &text)
-{
-    if (nvgTextBounds(vg, 0, 0, text.c_str(), nullptr, nullptr) <= width)
-    {
-        nvgText(vg, x, y, text.c_str(), nullptr);
-        return;
-    }
-    static const char kEllipsis[] = "\xE2\x80\xA6";
-    const float room = width - nvgTextBounds(vg, 0, 0, kEllipsis, nullptr, nullptr);
-    std::size_t length = text.size();
-    while (length > 0)
-    {
-        // Step back one whole UTF-8 character at a time.
-        do
-            --length;
-        while (length > 0 && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80);
-        if (nvgTextBounds(vg, 0, 0, text.c_str(), text.c_str() + length, nullptr) <= room)
-            break;
-    }
-    while (length > 0 && text[length - 1] == ' ')
-        --length;
-    const float end = nvgText(vg, x, y, text.c_str(), text.c_str() + length);
-    nvgText(vg, end, y, kEllipsis, nullptr);
-}
-
-// Fills a rounded rectangle with an image scaled to cover it, cropping what overflows.
-void cover_image(NVGcontext *vg, float x, float y, float width, float height, float radius,
-                 const Images::Texture &texture)
-{
-    const float scale =
-        std::max(width / static_cast<float>(texture.width), height / static_cast<float>(texture.height));
-    const float image_width = texture.width * scale;
-    const float image_height = texture.height * scale;
-    const NVGpaint paint =
-        nvgImagePattern(vg, x + (width - image_width) / 2, y + (height - image_height) / 2,
-                        image_width, image_height, 0, texture.handle, 1.0f);
-    nvgBeginPath(vg);
-    nvgRoundedRect(vg, x, y, width, height, radius);
-    nvgFillPaint(vg, paint);
-    nvgFill(vg);
-}
-
-void focus_ring(NVGcontext *vg, float x, float y, float width, float height, float radius)
-{
-    nvgBeginPath(vg);
-    nvgRoundedRect(vg, x - kFocusOutline / 2, y - kFocusOutline / 2, width + kFocusOutline,
-                   height + kFocusOutline, radius + kFocusOutline / 2);
-    nvgStrokeColor(vg, foreground(1.0f));
-    nvgStrokeWidth(vg, kFocusOutline);
-    nvgStroke(vg);
-}
 } // namespace
 
 App::App(NVGcontext *context, const std::string &font_folder, const std::string &image_folder)
@@ -97,6 +40,23 @@ App::App(NVGcontext *context, const std::string &font_folder, const std::string 
     font("medium", "PlusJakartaSans-Medium.ttf");
     font("semibold", "PlusJakartaSans-SemiBold.ttf");
     font("bold", "PlusJakartaSans-Bold.ttf");
+
+    details_ = std::make_unique<DetailsScreen>(vg_, *images_);
+    details_->set_callbacks({
+        [this](const std::string &video) {
+            if (title_handler_.select_video)
+                title_handler_.select_video(title_type_, title_id_, video);
+        },
+        [this](const Stream &stream, const std::string &title) {
+            if (title_handler_.play)
+                title_handler_.play(stream, title);
+        },
+        [this] {
+            title_open_ = false;
+            if (title_handler_.close)
+                title_handler_.close();
+        },
+    });
 }
 
 App::~App() = default;
@@ -106,6 +66,17 @@ void App::set_image_fetcher(
     std::function<bool(const std::string &address)> failed)
 {
     images_->set_fetcher(std::move(fetch), std::move(failed));
+}
+
+void App::set_title_handler(TitleHandler handler)
+{
+    title_handler_ = std::move(handler);
+}
+
+void App::set_details(Details details)
+{
+    if (title_open_)
+        details_->set_details(std::move(details));
 }
 
 void App::set_account(Account account)
@@ -214,6 +185,11 @@ void App::follow_focus()
 
 void App::press(Button button)
 {
+    if (title_open_)
+    {
+        details_->press(button);
+        return;
+    }
     switch (zone_)
     {
     case Zone::Navigation:
@@ -276,6 +252,33 @@ void App::press(Button button)
         }
         else if (button == Button::Down && row_focus_ + 1 < rows_.size())
             ++row_focus_;
+        else if (button == Button::Accept)
+        {
+            // Open the focused title's page.
+            if (const BoardItem *item = focused_item())
+            {
+                title_type_ = item->type;
+                title_id_ = item->id;
+                title_open_ = true;
+                details_->open(item->type, item->id, item->name);
+                // What the board already knows shows at once; the rest follows.
+                Details known;
+                known.type = item->type;
+                known.id = item->id;
+                known.name = item->name;
+                known.description = item->description;
+                known.background = item->background;
+                known.logo = item->logo;
+                known.release_info = item->release_info;
+                known.runtime = item->runtime;
+                known.imdb_rating = item->imdb_rating;
+                known.genres = item->genres;
+                known.streams_loading = 1;
+                details_->set_details(std::move(known));
+                if (title_handler_.open)
+                    title_handler_.open(item->type, item->id);
+            }
+        }
         else if (button == Button::Back)
         {
             zone_ = Zone::Navigation;
@@ -289,6 +292,9 @@ void App::press(Button button)
 
 void App::update(float seconds)
 {
+    if (title_open_)
+        details_->update(seconds);
+
     scroll_y_ = eased(scroll_y_, scroll_y_target_, seconds);
     for (std::size_t row = 0; row < scroll_x_.size(); ++row)
         scroll_x_[row] = eased(scroll_x_[row], scroll_x_target_[row], seconds);
@@ -321,6 +327,8 @@ void App::update(float seconds)
             hero_valid_ = item != nullptr;
             if (item != nullptr)
                 hero_ = *item;
+            hero_logo_wait_ = 0;
+            hero_named_ = false;
         }
     }
     else if (!stale && hero_valid_)
@@ -558,25 +566,22 @@ void App::draw_hero()
     float top = kHeroTextTop;
 
     // The title: the item's logo artwork when it has one. While the logo is on its way
-    // the space stays empty; the name is written out only for an item that has no logo, or
-    // whose logo could not be had.
+    // the space stays empty; the name is written out only for an item that has no logo,
+    // whose logo could not be had or has nothing in it, or whose logo is taking too long.
     const Images::Texture logo = images_->get(item->logo);
-    if (logo.state == Images::State::Ready && logo.width > 0 && logo.height > 0)
+    if (logo.state == Images::State::Pending && current)
+        hero_logo_wait_ += frame_seconds_;
+    const bool give_up = logo.state == Images::State::Pending && hero_logo_wait_ > kHeroLogoWait;
+    if (logo.state == Images::State::Ready && !hero_named_)
     {
         if (current)
             hero_logo_alpha_ = std::min(1.0f, hero_logo_alpha_ + rise);
-        const float scale = std::min(kHeroLogoWidth / static_cast<float>(logo.width),
-                                     kHeroLogoHeight / static_cast<float>(logo.height));
-        const float width = logo.width * scale, height = logo.height * scale;
-        const float y = top + (kHeroLogoHeight - height); // sits on the box's lower edge
-        nvgBeginPath(vg_);
-        nvgRect(vg_, left, y, width, height);
-        nvgFillPaint(vg_, nvgImagePattern(vg_, left, y, width, height, 0, logo.handle,
-                                          hero_logo_alpha_));
-        nvgFill(vg_);
+        draw_logo(vg_, left, top, kHeroLogoWidth, kHeroLogoHeight, logo, hero_logo_alpha_);
     }
-    else if (logo.state == Images::State::Unavailable)
+    else if (logo.state == Images::State::Unavailable || give_up || hero_named_)
     {
+        // Once the name has been shown for this item it stays, even if the logo turns up.
+        hero_named_ = true;
         nvgFontFace(vg_, "bold");
         nvgFontSize(vg_, kHeroTitleSize);
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_BOTTOM);
@@ -800,6 +805,13 @@ void App::draw(int width, int height)
     nvgFillColor(vg_, background());
     nvgFill(vg_);
 
+    if (title_open_)
+    {
+        // A title's page takes the whole screen.
+        details_->draw();
+        nvgEndFrame(vg_);
+        return;
+    }
     switch (kTabs[selected_tab_].icon)
     {
     case Icon::Board:

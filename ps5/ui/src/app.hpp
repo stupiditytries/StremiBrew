@@ -11,12 +11,14 @@
 
 #include "account_data.hpp"
 #include "board_data.hpp"
+#include "details_data.hpp"
 
 struct NVGcontext;
 
 namespace ui
 {
 class Images;
+class DetailsScreen;
 
 enum class Button
 {
@@ -36,6 +38,19 @@ enum class Intent
     SignOut,
 };
 
+// What the host does for a title's page.
+struct TitleHandler
+{
+    // Load a title's details; the answer comes back through App::set_details.
+    std::function<void(const std::string &type, const std::string &id)> open;
+    // Load the streams for one of the open title's videos (an episode).
+    std::function<void(const std::string &type, const std::string &id, const std::string &video)>
+        select_video;
+    std::function<void()> close;
+    // Play a stream of the open title; `title` is what the player shows.
+    std::function<void(const Stream &stream, const std::string &title)> play;
+};
+
 class App
 {
   public:
@@ -49,6 +64,13 @@ class App
         std::function<void(const std::string &address, const std::string &file)> fetch,
         std::function<bool(const std::string &address)> failed);
     void set_account(Account account);
+    void set_title_handler(TitleHandler handler);
+    // The open title's details, as they arrive and change.
+    void set_details(Details details);
+    bool title_open() const
+    {
+        return title_open_;
+    }
     void set_intent_handler(std::function<void(Intent)> handler);
     // The catalog (by its position among all of the board's catalogs) of the row the
     // focus is on, so the host can load rows ahead of it.
@@ -89,6 +111,10 @@ class App
     std::unique_ptr<Images> images_;
     std::vector<BoardRow> rows_;
     Account account_;
+    TitleHandler title_handler_;
+    std::unique_ptr<DetailsScreen> details_;
+    bool title_open_ = false;
+    std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
 
     Zone zone_ = Zone::Rows;
@@ -111,6 +137,8 @@ class App
     float hero_alpha_ = 0;
     float hero_logo_alpha_ = 0;
     float hero_art_alpha_ = 0;
+    float hero_logo_wait_ = 0; // seconds spent waiting for the shown item's logo
+    bool hero_named_ = false;  // the shown item's name was written out instead of its logo
     float frame_seconds_ = 0; // the last update's time step, for fades advanced while drawing
     // How visible each navigation button's label and highlight are, 0..1. A tab's name
     // shows only while the focus is on it, and fades in and out as the focus moves.
