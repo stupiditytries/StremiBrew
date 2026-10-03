@@ -1,8 +1,10 @@
 //! The app's model: the parts of the core the PS5 app uses. It starts with the user
-//! context and the board, and grows a field per screen as screens are built.
+//! context, the board and a title's details, and grows a field per screen as screens are
+//! built.
 
 use stremio_core::models::catalogs_with_extra::CatalogsWithExtra;
 use stremio_core::models::ctx::Ctx;
+use stremio_core::models::meta_details::MetaDetails;
 use stremio_core::runtime::Effects;
 use stremio_core::types::events::DismissedEventsBucket;
 use stremio_core::types::library::LibraryBucket;
@@ -20,6 +22,7 @@ use crate::env::Ps5Env;
 pub struct Ps5Model {
     pub ctx: Ctx,
     pub board: CatalogsWithExtra,
+    pub meta_details: MetaDetails,
 }
 
 impl Ps5Model {
@@ -43,6 +46,7 @@ impl Ps5Model {
                 dismissed_events,
             ),
             board: CatalogsWithExtra::default(),
+            meta_details: MetaDetails::default(),
         };
         (model, Effects::none().unchanged())
     }

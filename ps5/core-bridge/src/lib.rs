@@ -3,6 +3,7 @@
 //! The app starts the core once, sends it actions as JSON, drains the events it emits, and
 //! reads model state as JSON. All functions may be called from any thread.
 
+mod details;
 mod env;
 mod model;
 
@@ -422,4 +423,47 @@ pub extern "C" fn stremio_core_fetch_file(url: *const c_char, path: *const c_cha
     }
     env::fetch_to_file(url.to_owned(), PathBuf::from(path));
     0
+}
+
+/// Loads a title's details (see `details::load`). `video` may be null.
+#[no_mangle]
+pub extern "C" fn stremio_core_load_details(
+    r#type: *const c_char,
+    id: *const c_char,
+    video: *const c_char,
+) -> i32 {
+    let Some(runtime) = RUNTIME.get() else {
+        set_error("the core is not running");
+        return -1;
+    };
+    let (Some(r#type), Some(id)) = (c_str(r#type), c_str(id)) else {
+        set_error("type or id is not valid text");
+        return -2;
+    };
+    details::load(runtime, r#type, id, c_str(video));
+    0
+}
+
+/// Serialises the selected title's details for the UI as JSON (see `details::Details`).
+/// Returns the JSON's length, or 0 when no title is selected or on failure.
+#[no_mangle]
+pub extern "C" fn stremio_core_details(out: *mut c_char, capacity: usize) -> usize {
+    let Some(runtime) = RUNTIME.get() else {
+        set_error("the core is not running");
+        return 0;
+    };
+    let Ok(model) = runtime.model() else {
+        set_error("model read failed");
+        return 0;
+    };
+    let Some(details) = details::details(&model) else {
+        return 0;
+    };
+    match serde_json::to_string(&details) {
+        Ok(json) => copy_out(&json, out, capacity),
+        Err(error) => {
+            set_error(error.to_string());
+            0
+        }
+    }
 }

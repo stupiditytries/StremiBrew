@@ -7,7 +7,8 @@ use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use stremio_core_ps5::{
-    stremio_core_board_rows, stremio_core_board_summary, stremio_core_init,
+    stremio_core_board_rows, stremio_core_board_summary, stremio_core_details, stremio_core_init,
+    stremio_core_load_details,
     stremio_core_last_error, stremio_core_load_board, stremio_core_poll_event,
 };
 
@@ -49,5 +50,30 @@ fn main() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Optionally a title's details too: <type> <id> [video id] [output file].
+    let (Some(kind), Some(id)) = (std::env::args().nth(3), std::env::args().nth(4)) else {
+        return;
+    };
+    let video = std::env::args().nth(5).filter(|video| !video.is_empty());
+    let (kind, id) = (CString::new(kind).unwrap(), CString::new(id).unwrap());
+    let video = video.map(|video| CString::new(video).unwrap());
+    stremio_core_load_details(
+        kind.as_ptr(),
+        id.as_ptr(),
+        video.as_ref().map_or(std::ptr::null(), |video| video.as_ptr()),
+    );
+    // Add-ons answer one by one; give them a few seconds.
+    std::thread::sleep(Duration::from_secs(6));
+    let mut buffer = vec![0u8; 8 << 20];
+    let length = stremio_core_details(buffer.as_mut_ptr().cast(), buffer.len());
+    let json = String::from_utf8_lossy(&buffer[..length.min(buffer.len())]).into_owned();
+    match std::env::args().nth(6) {
+        Some(output) => {
+            std::fs::write(&output, &json).unwrap();
+            println!("wrote {length} bytes of details to {output}");
+        }
+        None => println!("{json}"),
     }
 }
