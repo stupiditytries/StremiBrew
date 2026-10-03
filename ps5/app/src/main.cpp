@@ -16,6 +16,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/gl.h>
+#include <ps5_opengl_display_modes.h>
 
 #define NANOVG_GL3_IMPLEMENTATION
 #include "nanovg.h"
@@ -87,6 +88,10 @@ struct Display
                                              EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
                                              EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR, EGL_NONE};
         display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        // The UI is drawn at 4K; the console scales it for a display that shows less. The
+        // mode can only be chosen before EGL starts.
+        if (!eglSetDisplayModePS5(display, 3840, 2160) || !eglSetDisplayRefreshPS5(display, 60))
+            log_line("display: 4K mode refused (0x%x), staying at the default", eglGetError());
         EGLConfig config = nullptr;
         EGLint count = 0;
         if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr) ||
@@ -267,9 +272,11 @@ int main()
     Display display;
     if (!display.open())
         return 1;
+    // The canvas matches the screen; the UI's 1920x1080 layout is scaled up to it, so text
+    // and shapes are drawn at the screen's full sharpness.
     Canvas canvas;
-    const int width = static_cast<int>(ui::theme::kScreenWidth);
-    const int height = static_cast<int>(ui::theme::kScreenHeight);
+    const int width = display.width;
+    const int height = display.height;
     if (!canvas.create(width, height))
         return 1;
     NVGcontext *vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES);

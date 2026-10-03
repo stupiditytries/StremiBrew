@@ -261,7 +261,9 @@ void App::update(float seconds)
 
 void App::draw_navigation()
 {
-    float top = kTopBarHeight + units(0.5f);
+    // The buttons sit as a group in the middle of the space under the top bar.
+    const float group = kTabCount * kNavButton + (kTabCount - 1) * kNavGap;
+    float top = kTopBarHeight + (kScreenHeight - kTopBarHeight - group) / 2;
     const float x = (kNavWidth - kNavButton) / 2;
     for (int index = 0; index < kTabCount; ++index)
     {

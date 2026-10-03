@@ -316,9 +316,20 @@ struct BoardItem<'a> {
     id: &'a str,
     r#type: &'a str,
     name: &'a str,
-    poster: Option<&'a str>,
+    poster: Option<std::borrow::Cow<'a, str>>,
     poster_shape: &'a stremio_core::types::resource::PosterShape,
     release_info: Option<&'a str>,
+}
+
+/// Stremio's poster service offers each poster in three sizes and catalogs link the
+/// smallest, which is soft on a 4K screen; the medium one is asked for instead.
+fn sharper_poster(url: &str) -> std::borrow::Cow<'_, str> {
+    const SMALL: &str = "images.metahub.space/poster/small/";
+    if url.contains(SMALL) {
+        url.replace(SMALL, "images.metahub.space/poster/medium/").into()
+    } else {
+        url.into()
+    }
 }
 
 /// Serialises the board's rows for the UI as JSON (see `BoardRow`), with at most
@@ -366,7 +377,7 @@ pub extern "C" fn stremio_core_board_rows(
                             id: &item.id,
                             r#type: &item.r#type,
                             name: &item.name,
-                            poster: item.poster.as_ref().map(|url| url.as_str()),
+                            poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
                             poster_shape: shape.unwrap_or(&item.poster_shape),
                             release_info: item.release_info.as_deref(),
                         })
