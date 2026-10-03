@@ -66,7 +66,35 @@ fn copy_out(text: &str, out: *mut c_char, capacity: usize) -> usize {
     text.len()
 }
 
+/// Sends a line to the console's kernel log, where it can be read from a PC even after
+/// the app has gone. Does nothing elsewhere.
+pub(crate) fn kernel_log(text: &str) {
+    #[cfg(target_os = "freebsd")]
+    {
+        extern "C" {
+            fn sceKernelDebugOutText(channel: i32, text: *const c_char) -> i32;
+        }
+        if let Ok(line) = std::ffi::CString::new(format!("[stremio] {text}\n")) {
+            unsafe { sceKernelDebugOutText(0, line.as_ptr()) };
+        }
+    }
+    #[cfg(not(target_os = "freebsd"))]
+    eprintln!("[stremio] {text}");
+}
+
+/// A panic ends the app (it is built to abort), so what it had to say is written to the
+/// kernel log and to a file beside the storage folder first.
+fn report_panics(storage_dir: &std::path::Path) {
+    let file = storage_dir.with_file_name("panic.log");
+    std::panic::set_hook(Box::new(move |info| {
+        let text = format!("panic: {info}");
+        kernel_log(&text);
+        let _ = std::fs::write(&file, &text);
+    }));
+}
+
 fn start(storage_dir: PathBuf) -> Result<(), EnvError> {
+    report_panics(&storage_dir);
     Ps5Env::init(storage_dir)?;
     block_on(Ps5Env::migrate_storage_schema())?;
     let (profile, recent, other, streams, server_urls, notifications, search_history, dismissed) =

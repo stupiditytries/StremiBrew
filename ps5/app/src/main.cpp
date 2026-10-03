@@ -46,6 +46,7 @@ extern "C"
     void stremio_core_account_advance(void);
     std::size_t stremio_core_account(char *out, std::size_t capacity);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
+    int sceKernelDebugOutText(int channel, const char *text);
 }
 
 namespace
@@ -58,15 +59,21 @@ constexpr char kFontFolder[] = "/app0/assets/fonts";
 void log_line(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void log_line(const char *format, ...)
 {
+    char text[512];
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(text, sizeof text, format, arguments);
+    va_end(arguments);
     if (std::FILE *log = std::fopen(kLogFile, "a"))
     {
-        va_list arguments;
-        va_start(arguments, format);
-        std::vfprintf(log, format, arguments);
-        va_end(arguments);
-        std::fputc('\n', log);
+        std::fprintf(log, "%s\n", text);
         std::fclose(log);
     }
+    // Also to the console's kernel log, which can be read from a PC after a crash (the
+    // file above cannot once the app has closed).
+    char line[560];
+    std::snprintf(line, sizeof line, "[stremio] %s\n", text);
+    sceKernelDebugOutText(0, line);
 }
 
 double seconds_now()
@@ -283,9 +290,6 @@ int main()
     mkdir(kImageFolder, 0777);
     // Downloaded artwork is kept between runs up to this size; the oldest goes first.
     constexpr std::uint64_t kImageFolderLimit = std::uint64_t{400} << 20;
-    const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
-    if (trimmed != 0)
-        log_line("image folder: removed %zu old files", trimmed);
 
     Display display;
     if (!display.open())
@@ -338,9 +342,12 @@ int main()
     }
     else
     {
+        log_line("core started");
         stremio_core_load_board(kRowBatch);
         rows_requested = kRowBatch;
-        log_line("core started");
+        log_line("board requested");
+        const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
+        log_line("image folder: removed %zu old files", trimmed);
     }
 
     ps5::Pad pad;

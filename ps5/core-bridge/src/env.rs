@@ -99,11 +99,13 @@ pub(crate) fn trim_folder(folder: &std::path::Path, limit: u64) -> usize {
     };
     let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
         .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let status = entry.metadata().ok()?;
+            // By path: the console cannot report a file's status through its folder's
+            // handle, which is what asking the entry itself would do.
+            let path = entry.ok()?.path();
+            let status = std::fs::metadata(&path).ok()?;
             status
                 .is_file()
-                .then(|| (status.modified().unwrap_or(std::time::UNIX_EPOCH), status.len(), entry.path()))
+                .then(|| (status.modified().unwrap_or(std::time::UNIX_EPOCH), status.len(), path))
         })
         .collect();
     let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
