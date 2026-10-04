@@ -131,6 +131,7 @@ class Player
     std::vector<std::uint16_t> packed_;
     bool sheet_sized_ = false;
     BarFinder bars_; // the black bars the pictures carry
+    bool assume_bars_ = false;
     int depth_ = 8;
     bool limited_ = true;
 

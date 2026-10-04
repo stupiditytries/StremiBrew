@@ -159,6 +159,9 @@ void TrailerControl::frame()
         player_.picture_bars(own_top, own_bottom);
         bar_top = (1.0f - filled) / 2 + own_top * filled;
         bar_bottom = (1.0f - filled) / 2 + own_bottom * filled;
+        if (live && ++frames_ % 120 == 1)
+            log_line("trailer: shape %.2f, its own bars %.1f%% and %.1f%%, bars in the texture %.1f%% and %.1f%%",
+                     shape, own_top * 100, own_bottom * 100, bar_top * 100, bar_bottom * 100);
         if (status.state == ui::Playback::State::Ended || status.state == ui::Playback::State::Failed)
         {
             // Over (or it would not play): back to the artwork.

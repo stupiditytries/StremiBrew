@@ -339,6 +339,7 @@ int main(int argc, char **argv)
                     luma[index] = static_cast<unsigned char>(
                         (pixels[index * 4] * 54 + pixels[index * 4 + 1] * 183 + pixels[index * 4 + 2] * 19) >> 8);
                 ps5::BarFinder finder;
+                finder.reset(0.128f);
                 for (int look = 0; look < 40; ++look)
                     finder.look(luma.data(), width, width, height, 1, 8, false);
                 finder.bars(trailer_top, trailer_bottom);

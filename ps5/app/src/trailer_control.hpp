@@ -40,5 +40,6 @@ class TrailerControl
     bool opened_ = false;   // the player has been given the trailer
     unsigned framebuffer_ = 0, texture_ = 0;
     int image_ = 0;
+    unsigned long frames_ = 0;
 };
 } // namespace ps5

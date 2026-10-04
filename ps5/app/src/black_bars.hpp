@@ -4,9 +4,13 @@
 // Each picture looked at gives a count of the rows at its top and at its bottom that are
 // black all the way across. One picture proves little: a dark scene is black everywhere,
 // and a trailer opens and closes on cards that fill the whole frame. So the counts from
-// the last few seconds are kept, and the bars are what most of those pictures agree on.
-// The answer follows the video: when a full-frame card gives way to the film, the bars
-// appear a moment later, and they go again when the film gives way to a card.
+// the last few seconds are kept and the answer comes from what those pictures agree on.
+//
+// The finder can be told to assume bars until it sees otherwise (most trailers of films
+// have them). It then reports bars of the usual size from the start, and drops them only
+// when most of the recent pictures have something in them where the bars would be. The
+// answer follows the video either way: a full-frame card removes the bars, and they are
+// back a moment after the film is.
 //
 // Nothing here depends on the player, so the same code is run on the PC against real
 // trailers (see tools/bars_test.cpp).
@@ -24,10 +28,13 @@ namespace ps5
 class BarFinder
 {
   public:
-    void reset()
+    // `assumed` is the bars to report until the pictures say otherwise: 0 for none, or a
+    // share of the height (a 2.39:1 film in a 16:9 file has 0.128 above and below).
+    void reset(float assumed = 0.0f)
     {
         count_ = next_ = 0;
-        top_ = bottom_ = 0;
+        assumed_ = assumed;
+        top_ = bottom_ = assumed;
         least_ = 1;
     }
 
@@ -96,24 +103,34 @@ class BarFinder
 
     void decide()
     {
-        if (count_ < 12)
+        if (count_ < 6)
             return;
-        // Real bars are in every picture, and a picture can only look as if it has more
-        // (when its own edge is dark). So the bars are what nearly all of the recent
-        // pictures have at least: the count a quarter of the way up from the smallest.
-        // Full-frame pictures count 0, so a card of a second or so removes the bars.
+        // Pictures with something in them where bars would be: when they are most of the
+        // recent ones, the video is filling its frame and has no bars.
+        int open = 0;
+        for (int index = 0; index < count_; ++index)
+            open += tops_[index] < 0.05f || bottoms_[index] < 0.05f;
+        if (open * 2 >= count_)
+        {
+            top_ = bottom_ = 0;
+            return;
+        }
+        // Otherwise there are bars. Their size: real bars are in every picture, and a
+        // picture can only look as if it has more (when its own edge is dark), so it is
+        // the count a quarter of the way up from the smallest of the recent ones.
         float tops[kKept], bottoms[kKept];
         std::copy(tops_, tops_ + count_, tops);
         std::copy(bottoms_, bottoms_ + count_, bottoms);
         std::nth_element(tops, tops + count_ / 4, tops + count_);
         std::nth_element(bottoms, bottoms + count_ / 4, bottoms + count_);
         float top = tops[count_ / 4], bottom = bottoms[count_ / 4];
-        // Bars are a matching pair of some size; anything else is the picture itself
-        // being dark along an edge.
-        const bool pair = top >= 0.025f && bottom >= 0.025f && std::abs(top - bottom) <= 0.04f;
+        // Bars are a matching pair of some size. Without one (too few pictures yet, or a
+        // mix) what was reported before stands, or the assumed size.
+        const bool pair = count_ >= 12 && top >= 0.025f && bottom >= 0.025f && std::abs(top - bottom) <= 0.04f;
         if (!pair)
         {
-            top_ = bottom_ = 0;
+            if (top_ == 0)
+                top_ = bottom_ = assumed_;
             return;
         }
         // A video's bars are one size throughout, so the smallest pair found so far caps
@@ -134,5 +151,6 @@ class BarFinder
     int count_ = 0, next_ = 0;
     float top_ = 0, bottom_ = 0;
     float least_ = 1; // the smallest bars found in this video so far
+    float assumed_ = 0;
 };
 } // namespace ps5

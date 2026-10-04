@@ -27,6 +27,8 @@ int main(int argc, char **argv)
     const double rate = std::atof(argv[3]);
     std::vector<unsigned char> picture(static_cast<std::size_t>(width) * height);
     ps5::BarFinder finder;
+    // As the player does: bars are assumed for a file of ordinary shape.
+    finder.reset(static_cast<double>(width) / height < 1.9 ? 0.128f : 0.0f);
     float shown_top = -1, shown_bottom = -1;
     long count = 0, with_bars = 0;
     while (std::fread(picture.data(), 1, picture.size(), stdin) == picture.size())

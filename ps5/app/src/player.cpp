@@ -1408,6 +1408,8 @@ void Player::open(const std::string &url, double start, const std::string &audio
     session_->url = url;
     session_->audio_language = audio_language;
     session_->preview = options.preview;
+    assume_bars_ = options.preview;
+    format_ = -1; // the next picture is described afresh, for this video
     session_->volume = options.volume;
     session_->paused = options.paused;
     if (start > 1.0)
@@ -1837,7 +1839,11 @@ bool Player::describe(const void *picture)
     sheet_height_ = frame->height + chroma_height;
     packed_.assign(static_cast<std::size_t>(sheet_width_) * static_cast<std::size_t>(sheet_height_), 0);
     sheet_sized_ = false;
-    bars_.reset();
+    // A trailer in a file of ordinary shape is taken to have a wide film's bars until
+    // its pictures show otherwise; a file that is itself wide has none to assume.
+    bars_.reset(assume_bars_ && static_cast<float>(frame->width) / static_cast<float>(frame->height) < 1.9f
+                    ? 0.128f
+                    : 0.0f);
     depth_ = depth;
 
     const Colours colours = colours_of(frame, depth, bytes_);
