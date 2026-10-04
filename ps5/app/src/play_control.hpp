@@ -3,9 +3,10 @@
 // account's add-ons have), keeps the scrubbing picture, and tells the core how far
 // playback has got so the library's progress follows.
 //
-// The audio track, the subtitles and their delay chosen for a title are remembered (in a
-// small file of the app's own) and applied the next time anything of that title is played,
-// so a choice made for one episode holds for the rest of the series.
+// The audio track and the subtitles chosen for a title are remembered (in a small file of
+// the app's own) and applied the next time anything of that title is played, so a choice
+// made for one episode holds for the rest of the series. The subtitle delay is not: it
+// belongs to one subtitle file and one viewing, and starts from nothing each time.
 
 #pragma once
 

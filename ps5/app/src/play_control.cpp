@@ -252,14 +252,14 @@ void PlayControl::start(const ui::Stream &stream, const std::string &type, const
     player_.open(stream.url, static_cast<double>(left_at) / 1000.0,
                  remembered_.audio_language.empty() ? app_.account().audio_language
                                                     : remembered_.audio_language);
-    player_.set_subtitle_delay(remembered_.delay / 1000.0);
 
     shared_ = std::make_shared<Shared>();
     embedded_.clear();
     externals_.clear();
     tracks_known_ = externals_known_ = false;
     subtitle_selected_ = 0;
-    subtitle_delay_ = remembered_.delay / 1000.0;
+    // The delay is for this viewing only: it starts from nothing each time.
+    subtitle_delay_ = 0;
     // "Off" chosen before for this title stands: nothing is picked automatically.
     subtitle_chosen_ = remembered_.subtitles == 1;
     preview_index_ = -1;
@@ -331,8 +331,6 @@ ui::PlayerHandler PlayControl::handler()
     handler.set_subtitle_delay = [this](double seconds) {
         subtitle_delay_ = seconds;
         player_.set_subtitle_delay(seconds);
-        remembered_.delay = static_cast<int>(seconds * 1000.0 + (seconds < 0 ? -0.5 : 0.5));
-        remember();
         rebuild_tracks();
     };
     handler.preview = [this](double seconds) { preview_asked_ = seconds; };
@@ -682,8 +680,6 @@ void PlayControl::follow_calibration()
         log_line("calibrate: subtitles set to %+.2f s (%d words agreed)", delay, result.matches);
         subtitle_delay_ = delay;
         player_.set_subtitle_delay(delay);
-        remembered_.delay = static_cast<int>(delay * 1000.0 + (delay < 0 ? -0.5 : 0.5));
-        remember();
         rebuild_tracks();
         calibration_.delay = delay;
         finish(State::Done, {});
