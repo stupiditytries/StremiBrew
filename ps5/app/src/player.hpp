@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "black_bars.hpp"
 #include "player_screen.hpp"
 
 namespace ps5
@@ -103,7 +104,7 @@ class Player
                  int &index, double &time);
 
     // The picture's shape (width over height), and how much of its height is black bars
-    // at its top and at its bottom (0 to 1 each; 0 until enough pictures have been seen).
+    // at its top and at its bottom (0 to 1 each), as the last few seconds show it.
     float picture_aspect() const
     {
         return picture_aspect_;
@@ -129,10 +130,9 @@ class Player
     int area_[3][4] = {};
     std::vector<std::uint16_t> packed_;
     bool sheet_sized_ = false;
-    // Black bars: the fewest black rows seen at the top and the bottom of any picture
-    // that had something in it, and how many such pictures have been looked at.
-    void measure_bars(const void *frame);
-    int bar_top_ = 0, bar_bottom_ = 0, bar_frames_ = 0;
+    BarFinder bars_; // the black bars the pictures carry
+    int depth_ = 8;
+    bool limited_ = true;
 
     bool has_picture_ = false;
     int shown_serial_ = -1;

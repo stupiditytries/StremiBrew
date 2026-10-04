@@ -1837,10 +1837,11 @@ bool Player::describe(const void *picture)
     sheet_height_ = frame->height + chroma_height;
     packed_.assign(static_cast<std::size_t>(sheet_width_) * static_cast<std::size_t>(sheet_height_), 0);
     sheet_sized_ = false;
-    bar_top_ = bar_bottom_ = frame->height;
-    bar_frames_ = 0;
+    bars_.reset();
+    depth_ = depth;
 
     const Colours colours = colours_of(frame, depth, bytes_);
+    limited_ = !colours.full;
     glUseProgram(program_);
     glUniform2f(glGetUniformLocation(program_, "sheet_size"), static_cast<float>(sheet_width_),
                 static_cast<float>(sheet_height_));
@@ -1873,66 +1874,17 @@ bool Player::describe(const void *picture)
 // three; and an 8-bit texture costs it some 40 ms, which no video's frame rate survives,
 // so 8-bit video is widened. (A sample v becomes v * 257, the same fraction of the 16-bit
 // range as v is of the 8-bit one, so the colour arithmetic does not change.)
-// Looks for black bars: counts the rows at the top and at the bottom of the picture that
-// are black all the way across. A wide film in a 16:9 file carries such bars in every
-// picture, so the fewest found over the pictures seen is the bars' size; a dark scene has
-// "bars" as tall as the picture and tells nothing, so it is left out.
-void Player::measure_bars(const void *picture)
-{
-    const auto *frame = static_cast<const AVFrame *>(picture);
-    // Black is 16 of 255 in most video; a little above that still counts (noise).
-    const int black = (bytes_ == 2 ? 30 * (1 << (av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format))->comp[0].depth - 8)) : 30);
-    const auto dark = [&](int y) {
-        const std::uint8_t *row = frame->data[0] + static_cast<std::ptrdiff_t>(y) * frame->linesize[0];
-        int bright = 0;
-        // Every eighth sample across, away from the very edges.
-        for (int x = frame->width / 16; x < frame->width - frame->width / 16; x += 8)
-        {
-            int value;
-            if (bytes_ == 2)
-            {
-                std::uint16_t wide;
-                std::memcpy(&wide, row + x * 2, 2);
-                value = wide;
-            }
-            else
-                value = row[x];
-            if (value > black && ++bright > 4)
-                return false;
-        }
-        return true;
-    };
-    const int reach = frame->height * 2 / 5; // no bar is more than this
-    int top = 0, bottom = 0;
-    while (top < reach && dark(top))
-        ++top;
-    while (bottom < reach && dark(frame->height - 1 - bottom))
-        ++bottom;
-    if (top >= reach && bottom >= reach)
-        return; // a dark picture
-    bar_top_ = std::min(bar_top_, top);
-    bar_bottom_ = std::min(bar_bottom_, bottom);
-    ++bar_frames_;
-}
-
 void Player::picture_bars(float &top, float &bottom) const
 {
-    top = bottom = 0;
-    if (bar_frames_ < 6 || height_ <= 0)
-        return;
-    // Only bars of some size, and only a matching pair, are taken for bars.
-    const int least = height_ / 40;
-    if (bar_top_ < least || bar_bottom_ < least || std::abs(bar_top_ - bar_bottom_) > height_ / 20)
-        return;
-    top = static_cast<float>(bar_top_) / static_cast<float>(height_);
-    bottom = static_cast<float>(bar_bottom_) / static_cast<float>(height_);
+    bars_.bars(top, bottom);
 }
 
 void Player::upload(const void *picture)
 {
     const auto *frame = static_cast<const AVFrame *>(picture);
-    if ((shown_ & 3) == 0)
-        measure_bars(frame);
+    // Every second picture is looked at for black bars (see black_bars.hpp).
+    if ((shown_ & 1) == 0)
+        bars_.look(frame->data[0], frame->linesize[0], frame->width, frame->height, bytes_, depth_, limited_);
     for (int plane = 0; plane < 3; ++plane)
     {
         const int width = area_[plane][2], height = area_[plane][3];

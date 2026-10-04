@@ -28,6 +28,9 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#include "stb_image.h"
+
+#include "../../app/src/black_bars.hpp"
 
 #include "app.hpp"
 #include "board_data.hpp"
@@ -96,6 +99,9 @@ void complete_sign_in()
     account.addons = 14;
     app->set_account(account);
 }
+
+// A picture standing in for a trailer (see --trailer).
+std::string trailer_picture;
 
 char calibration_mock = 0; // l listening, w working, d done, f failed
 
@@ -196,6 +202,12 @@ int main(int argc, char **argv)
             // A calibration notice mock-up: "a" or "b" for the look, then the state.
             const std::string look = argv[index + 1];
             calibration_mock = look.size() > 1 ? look[1] : 'l';
+        }
+        else if (option == "--trailer")
+        {
+            // A still that stands in for a playing trailer: a picture of what the
+            // console's trailer texture would hold (the video fitted into 1920x1080).
+            trailer_picture = argv[index + 1];
         }
         else if (option == "--backdrop")
         {
@@ -310,6 +322,48 @@ int main(int argc, char **argv)
         instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {
             std::printf("languages: %s / %s\n", audio.c_str(), subtitles.c_str());
         });
+        // The stand-in trailer is made the way the console makes the real one: a texture
+        // whose first row is its bottom one, handed to the UI as an image flagged as
+        // upside down; and its black bars are found by the player's own bar finder.
+        int trailer_image = 0;
+        float trailer_top = 0, trailer_bottom = 0;
+        if (!trailer_picture.empty())
+        {
+            int width = 0, height = 0, channels = 0;
+            stbi_set_flip_vertically_on_load(0);
+            unsigned char *pixels = stbi_load(trailer_picture.c_str(), &width, &height, &channels, 4);
+            if (pixels != nullptr)
+            {
+                std::vector<unsigned char> luma(static_cast<std::size_t>(width) * height);
+                for (std::size_t index = 0; index < luma.size(); ++index)
+                    luma[index] = static_cast<unsigned char>(
+                        (pixels[index * 4] * 54 + pixels[index * 4 + 1] * 183 + pixels[index * 4 + 2] * 19) >> 8);
+                ps5::BarFinder finder;
+                for (int look = 0; look < 40; ++look)
+                    finder.look(luma.data(), width, width, height, 1, 8, false);
+                finder.bars(trailer_top, trailer_bottom);
+                std::printf("trailer picture %dx%d: bars %.1f%% top, %.1f%% bottom\n", width, height,
+                            trailer_top * 100, trailer_bottom * 100);
+                // Rows bottom-up, as a texture that has been drawn into.
+                std::vector<unsigned char> turned(static_cast<std::size_t>(width) * height * 4);
+                for (int row = 0; row < height; ++row)
+                    std::copy(pixels + static_cast<std::size_t>(row) * width * 4,
+                              pixels + static_cast<std::size_t>(row + 1) * width * 4,
+                              turned.begin() + static_cast<std::ptrdiff_t>(height - 1 - row) * width * 4);
+                GLuint texture = 0;
+                glGenTextures(1, &texture);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, turned.data());
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                trailer_image = nvglCreateImageFromHandleGL3(vg, texture, width, height,
+                                                             NVG_IMAGE_FLIPY | NVG_IMAGE_NODELETE);
+                stbi_image_free(pixels);
+            }
+        }
         glfwSetKeyCallback(window, on_key);
 
         const auto frame = [&](float seconds) {
@@ -333,6 +387,8 @@ int main(int argc, char **argv)
             }
             instance.set_playback(playback);
             instance.set_player_tracks(tracks);
+            if (trailer_image != 0)
+                instance.set_trailer(trailer_image, true, trailer_top, trailer_bottom);
             instance.update(seconds);
             instance.draw(framebuffer_width, framebuffer_height);
         };
@@ -358,6 +414,9 @@ int main(int argc, char **argv)
                     instance.press(button);
                 settle();
             }
+            if (trailer_image != 0)
+                for (int wait = 0; wait < 6; ++wait)
+                    settle();
             int framebuffer_width = 0, framebuffer_height = 0;
             glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
             glFinish();
