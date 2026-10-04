@@ -97,6 +97,8 @@ void complete_sign_in()
     app->set_account(account);
 }
 
+char calibration_mock = 0; // l listening, w working, d done, f failed
+
 void on_key(GLFWwindow *window, int key, int, int action, int)
 {
     if (action != GLFW_PRESS && action != GLFW_REPEAT)
@@ -189,6 +191,12 @@ int main(int argc, char **argv)
             shot = argv[index + 1];
         else if (option == "--keys")
             keys = argv[index + 1];
+        else if (option == "--calibrate")
+        {
+            // A calibration notice mock-up: "a" or "b" for the look, then the state.
+            const std::string look = argv[index + 1];
+            calibration_mock = look.size() > 1 ? look[1] : 'l';
+        }
         else if (option == "--backdrop")
         {
             // soft, light or sharp: how a title page treats its artwork.
@@ -281,8 +289,24 @@ int main(int argc, char **argv)
             [](int index) { tracks.audio_selected = index; },
             [](int index) { tracks.subtitle_selected = index; },
             [](double seconds) { tracks.subtitle_delay = seconds; },
+            [] {},
             [](double) {},
         });
+        static ui::SpeechModels speech;
+        speech.ready[1] = true;
+        if (calibration_mock == 'p')
+        {
+            // The download mock-up: the first model part-way down.
+            speech.downloading = 0;
+            speech.progress = 43;
+        }
+        instance.set_speech_models(speech);
+        instance.set_speech_handlers(
+            [&instance](int model) {
+                speech.chosen = model;
+                instance.set_speech_models(speech);
+            },
+            [](int) {});
         instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {
             std::printf("languages: %s / %s\n", audio.c_str(), subtitles.c_str());
         });
@@ -296,6 +320,17 @@ int main(int argc, char **argv)
             glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
             if (playback.state == ui::Playback::State::Playing)
                 playback.position += seconds;
+            if (calibration_mock != 0 && calibration_mock != 'p')
+            {
+                playback.subtitle.clear();
+                playback.calibration.progress = 0.62f;
+                playback.calibration.delay = 1.25;
+                playback.calibration.message = "No dialogue matched. Try again while someone is speaking.";
+                playback.calibration.state = calibration_mock == 'w'   ? ui::Calibration::State::Working
+                                             : calibration_mock == 'd' ? ui::Calibration::State::Done
+                                             : calibration_mock == 'f' ? ui::Calibration::State::Failed
+                                                                       : ui::Calibration::State::Listening;
+            }
             instance.set_playback(playback);
             instance.set_player_tracks(tracks);
             instance.update(seconds);

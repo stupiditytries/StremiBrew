@@ -69,6 +69,18 @@ class Player
     void set_external_subtitles(std::vector<Cue> cues);
     // Shows subtitles this many seconds later than they are timed (earlier when negative).
     void set_subtitle_delay(double seconds);
+    // The subtitle lines on hand, as timed (without the delay).
+    std::vector<Cue> subtitles() const;
+    // The audio track's language, as the file gives it.
+    std::string audio_language() const;
+
+    // Takes a copy of the next `seconds` of sound as it is played: mono, 16,000 samples
+    // a second (what speech recognition wants). capture_state says how it is going: 0 to
+    // 1 while it runs, 2 when it is complete and take_capture has it, -1 when it was cut
+    // short (a pause or a seek) or there is no sound to take.
+    void capture_audio(double seconds);
+    float capture_state() const;
+    bool take_capture(std::vector<float> &samples, double &start);
 
     // The small picture of the video nearest `seconds`, of those made so far (they are
     // made in the background from when the video opens). `index` says which picture the

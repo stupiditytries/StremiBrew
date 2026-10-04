@@ -21,6 +21,23 @@ namespace ui
 {
 enum class Button;
 
+// Auto-calibrate: the host listens to some of the video's dialogue, works out what was
+// said, and moves the subtitles so their lines fall where they were spoken.
+struct Calibration
+{
+    enum class State
+    {
+        Idle,
+        Listening, // gathering the dialogue; `progress` runs 0 to 1
+        Working,   // working out what was said and matching it to the subtitles
+        Done,      // `delay` is what the subtitles were set to
+        Failed,    // `message` says why
+    };
+    State state = State::Idle;
+    float progress = 0;
+    double delay = 0;
+    std::string message;
+};
 // What the host's player is doing.
 struct Playback
 {
@@ -42,6 +59,7 @@ struct Playback
     // made at the controls' request while scrubbing.
     int preview_image = 0;
     double preview_time = 0;
+    Calibration calibration;
 };
 
 // How subtitles are drawn; set in Settings.
@@ -51,6 +69,8 @@ struct SubtitleStyle
     int background = 60; // how solid the black plate behind each line is, percent; 0 is none
     int colour = 0;      // which of kSubtitleColours
     bool bold = false;
+    // Milliseconds added to the delay auto-calibrate finds.
+    int calibration_offset = 0;
 };
 struct SubtitleColour
 {
@@ -91,6 +111,7 @@ struct PlayerHandler
     std::function<void(int index)> choose_audio;
     std::function<void(int index)> choose_subtitle;
     std::function<void(double seconds)> set_subtitle_delay;
+    std::function<void()> calibrate;
     // Make a small picture of the video at this time (see Playback::preview_image).
     std::function<void(double seconds)> preview;
 };
@@ -105,6 +126,7 @@ class PlayerScreen
     void set_playback(const Playback &playback);
     void set_tracks(PlayerTracks tracks);
     void set_subtitle_style(const SubtitleStyle &style);
+    void set_hold(float progress);
     // Returns false for a press that leaves the player (Back).
     bool press(Button button);
     void update(float seconds);
@@ -137,6 +159,7 @@ class PlayerScreen
     void draw_scrub_preview(float thumb_x, float bar_top, float alpha);
     void draw_subtitle();
     void draw_menu();
+    void draw_calibration();
 
     NVGcontext *vg_;
     PlayerHandler handler_;
@@ -162,7 +185,12 @@ class PlayerScreen
     Menu menu_ = Menu::None;
     Menu menu_shown_ = Menu::None; // the one being drawn (it outlives menu_ while it slides out)
     float menu_slide_ = 0;         // 0..1, how far in it is
-    int menu_focus_ = 0; // -1 is the subtitles list's delay row, above the list
+    // In the subtitles list two rows sit above the list itself: -2 is auto-calibrate,
+    // -1 the delay.
+    int menu_focus_ = 0;
+    float hold_ = 0;         // how far through being held the calibrate button is
+    float notice_ = 0;       // 0..1, how visible the calibration notice is
+    float notice_stay_ = 0;  // seconds a result has been on screen
     float menu_scroll_ = 0, menu_scroll_target_ = 0;
 };
 } // namespace ui

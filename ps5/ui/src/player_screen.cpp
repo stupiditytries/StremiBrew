@@ -24,6 +24,8 @@ constexpr float kButton = units(2.9f); // a button's diameter
 constexpr float kButtonPitch = kButton + units(0.9f);
 // Seconds the controls stay up after the last press while a video plays.
 constexpr float kControlsStay = 4.0f;
+// Seconds a calibration's result stays on screen.
+constexpr float kNoticeStay = 4.0f;
 // Seconds after the last scrub press before the video jumps to the marker.
 constexpr float kScrubSettle = 0.9f;
 // Seconds the back and forward buttons, and one scrub press, move by.
@@ -84,7 +86,7 @@ void PlayerScreen::set_tracks(PlayerTracks tracks)
 {
     tracks_ = std::move(tracks);
     const int count = static_cast<int>(menu_options().size());
-    menu_focus_ = std::clamp(menu_focus_, -1, std::max(0, count - 1));
+    menu_focus_ = std::clamp(menu_focus_, -2, std::max(0, count - 1));
 }
 
 const std::vector<TrackOption> &PlayerScreen::menu_options() const
@@ -153,11 +155,22 @@ bool PlayerScreen::press(Button button)
         const int count = static_cast<int>(menu_options().size());
         // The subtitles list has a row above it for their delay, which left and right
         // change a quarter of a second at a time.
-        const int first = menu_ == Menu::Subtitles ? -1 : 0;
+        const int first = menu_ == Menu::Subtitles ? -2 : 0;
         if (button == Button::Up && menu_focus_ > first)
             --menu_focus_;
         else if (button == Button::Down && menu_focus_ + 1 < count)
             ++menu_focus_;
+        else if (menu_focus_ == -2)
+        {
+            if (button == Button::Accept)
+            {
+                menu_ = Menu::None;
+                if (handler_.calibrate)
+                    handler_.calibrate();
+            }
+            else if (button == Button::Back || button == Button::Left)
+                menu_ = Menu::None;
+        }
         else if (menu_focus_ == -1)
         {
             if (button == Button::Left || button == Button::Right)
@@ -185,6 +198,12 @@ bool PlayerScreen::press(Button button)
         return false;
     if (!ready)
         return true;
+    if (button == Button::Calibrate)
+    {
+        if (handler_.calibrate)
+            handler_.calibrate();
+        return true;
+    }
     if (button == Button::SkipBack || button == Button::SkipForward)
     {
         skip(button == Button::SkipForward ? kSkip : -kSkip);
@@ -254,6 +273,16 @@ void PlayerScreen::update(float seconds)
     }
     const bool stay = playback_.state != Playback::State::Playing || scrubbing_ ||
                       menu_ != Menu::None || idle_ < kControlsStay;
+    // The calibration notice is up while there is something to say: the button being
+    // held, the calibration running, and its result for a few seconds.
+    const Calibration::State calibrating = playback_.calibration.state;
+    const bool result = calibrating == Calibration::State::Done || calibrating == Calibration::State::Failed;
+    notice_stay_ = result ? notice_stay_ + seconds : 0.0f;
+    // It gives way to the track lists, which open over the same corner.
+    const bool notice = menu_ == Menu::None &&
+                        (hold_ > 0.02f || (calibrating != Calibration::State::Idle && !result) ||
+                         (result && notice_stay_ < kNoticeStay));
+    notice_ = notice ? std::min(1.0f, notice_ + seconds / 0.15f) : std::max(0.0f, notice_ - seconds / 0.4f);
     const float step = seconds / (stay ? 0.15f : 0.5f);
     controls_ = stay ? std::min(1.0f, controls_ + step) : std::max(0.0f, controls_ - step);
     const bool busy = playback_.state == Playback::State::Opening ||
@@ -264,7 +293,7 @@ void PlayerScreen::update(float seconds)
     if (menu_ == Menu::None && menu_slide_ < 0.01f)
         menu_shown_ = Menu::None;
     // The focused row is kept inside the list.
-    const float window = kMenuBottom - kMenuTop - (menu_shown_ == Menu::Subtitles ? kMenuRow + units(0.6f) : 0.0f);
+    const float window = kMenuBottom - kMenuTop - (menu_shown_ == Menu::Subtitles ? 2 * kMenuRow + units(0.6f) : 0.0f);
     const float top = static_cast<float>(std::max(0, menu_focus_)) * kMenuRow;
     if (top < menu_scroll_target_)
         menu_scroll_target_ = top;
@@ -518,6 +547,107 @@ void PlayerScreen::set_subtitle_style(const SubtitleStyle &style)
     subtitle_style_ = style;
 }
 
+void PlayerScreen::set_hold(float progress)
+{
+    hold_ = progress;
+}
+
+// The calibration notice: while the button is being held, while listening and working,
+// and for a few seconds after with what came of it.
+void PlayerScreen::draw_calibration()
+{
+    if (notice_ < 0.01f)
+        return;
+    const Calibration &calibration = playback_.calibration;
+    using State = Calibration::State;
+    const bool holding = calibration.state == State::Idle;
+    char text[160];
+    switch (calibration.state)
+    {
+    case State::Idle:
+    case State::Listening:
+    case State::Working:
+        std::snprintf(text, sizeof text, "Calibrating Subtitles");
+        break;
+    case State::Done:
+        if (std::abs(calibration.delay) < 0.01)
+            std::snprintf(text, sizeof text, "Subtitles are in time with the dialogue");
+        else
+            std::snprintf(text, sizeof text, "Subtitles set %.2f s %s", std::abs(calibration.delay),
+                          calibration.delay > 0 ? "later" : "earlier");
+        break;
+    case State::Failed:
+        std::snprintf(text, sizeof text, "%s", calibration.message.c_str());
+        break;
+    }
+    const float alpha = notice_;
+    const float progress = holding ? hold_ : calibration.progress;
+    // A ring that fills (holding, listening), turns (working) or carries the outcome.
+    const auto ring = [&](float x, float y, float radius) {
+        nvgLineCap(vg_, NVG_ROUND);
+        nvgStrokeWidth(vg_, radius * 0.24f);
+        nvgBeginPath(vg_);
+        nvgCircle(vg_, x, y, radius);
+        nvgStrokeColor(vg_, nvgRGBAf(1, 1, 1, 0.2f * alpha));
+        nvgStroke(vg_);
+        if (calibration.state == State::Working)
+        {
+            nvgBeginPath(vg_);
+            nvgArc(vg_, x, y, radius, spin_, spin_ + 1.6f, NVG_CW);
+            nvgStrokeColor(vg_, accent(alpha));
+            nvgStroke(vg_);
+        }
+        else if (calibration.state == State::Done || calibration.state == State::Failed)
+        {
+            const bool good = calibration.state == State::Done;
+            nvgBeginPath(vg_);
+            nvgCircle(vg_, x, y, radius);
+            nvgStrokeColor(vg_, good ? accent(alpha) : nvgRGBAf(1.0f, 0.6f, 0.3f, alpha));
+            nvgStroke(vg_);
+            nvgBeginPath(vg_);
+            if (good)
+            {
+                nvgMoveTo(vg_, x - radius * 0.42f, y + radius * 0.02f);
+                nvgLineTo(vg_, x - radius * 0.1f, y + radius * 0.34f);
+                nvgLineTo(vg_, x + radius * 0.45f, y - radius * 0.3f);
+            }
+            else
+            {
+                nvgMoveTo(vg_, x, y - radius * 0.45f);
+                nvgLineTo(vg_, x, y + radius * 0.1f);
+                nvgMoveTo(vg_, x, y + radius * 0.42f);
+                nvgLineTo(vg_, x, y + radius * 0.44f);
+            }
+            nvgStrokeColor(vg_, foreground_solid(alpha));
+            nvgLineJoin(vg_, NVG_ROUND);
+            nvgStroke(vg_);
+            nvgLineJoin(vg_, NVG_MITER);
+        }
+        else if (progress > 0.001f)
+        {
+            nvgBeginPath(vg_);
+            nvgArc(vg_, x, y, radius, -kPi / 2, -kPi / 2 + progress * 2 * kPi, NVG_CW);
+            nvgStrokeColor(vg_, accent(alpha));
+            nvgStroke(vg_);
+        }
+        nvgLineCap(vg_, NVG_BUTT);
+    };
+    // A pill in the top right corner: the ring, then the words.
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, units(1.15f));
+    const float height = units(3.2f), top = units(2.0f);
+    const float width = nvgTextBounds(vg_, 0, 0, text, nullptr, nullptr) + units(5.2f);
+    const float left = kScreenWidth - kSide - width;
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, left, top, width, height, height / 2);
+    nvgFillColor(vg_, nvgRGBAf(0.05f, 0.05f, 0.07f, 0.9f * alpha));
+    nvgFill(vg_);
+    ring(left + units(1.9f), top + height / 2, units(0.85f));
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+    nvgFillColor(vg_, foreground(alpha));
+    nvgText(vg_, left + units(3.7f), top + height / 2, text, nullptr);
+}
+
 void PlayerScreen::draw_menu()
 {
     if (menu_shown_ == Menu::None || menu_slide_ < 0.01f)
@@ -543,19 +673,39 @@ void PlayerScreen::draw_menu()
         nvgText(vg_, left + kMenuWidth - inset, units(4.7f), "Asking add-ons", nullptr);
     }
 
-    // Subtitles: their delay, in a row of its own above the list.
+    // Subtitles: two rows of their own above the list. Auto-calibrate times them to the
+    // dialogue; the delay is that timing, which left and right also change by hand.
     float list_top = kMenuTop;
     if (!audio)
     {
-        const bool focused = menu_ != Menu::None && menu_focus_ == -1;
         const float row_left = left + units(1.2f), row_width = kMenuWidth - units(2.4f);
-        const float row_height = kMenuRow - units(0.4f), middle = kMenuTop + row_height / 2;
-        nvgBeginPath(vg_);
-        nvgRoundedRect(vg_, row_left, kMenuTop, row_width, row_height, kRadius * 0.8f);
-        nvgFillColor(vg_, nvgRGBAf(1, 1, 1, focused ? 0.14f : 0.06f));
-        nvgFill(vg_);
-        if (focused)
-            focus_ring(vg_, row_left, kMenuTop, row_width, row_height, kRadius * 0.8f);
+        const float row_height = kMenuRow - units(0.4f);
+        const auto row = [&](int index, float top) {
+            const bool focused = menu_ != Menu::None && menu_focus_ == index;
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, row_left, top, row_width, row_height, kRadius * 0.8f);
+            nvgFillColor(vg_, nvgRGBAf(1, 1, 1, focused ? 0.14f : 0.06f));
+            nvgFill(vg_);
+            if (focused)
+                focus_ring(vg_, row_left, top, row_width, row_height, kRadius * 0.8f);
+            return focused;
+        };
+        float middle = kMenuTop + row_height / 2;
+        row(-2, kMenuTop);
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+        nvgFontFace(vg_, "medium");
+        nvgFontSize(vg_, units(1.15f));
+        nvgFillColor(vg_, foreground(0.95f));
+        nvgText(vg_, row_left + units(1.2f), middle, "Auto-calibrate", nullptr);
+        nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+        nvgFontFace(vg_, "regular");
+        nvgFontSize(vg_, units(0.95f));
+        nvgFillColor(vg_, foreground(0.55f));
+        nvgText(vg_, row_left + row_width - units(1.2f), middle, "or hold triangle", nullptr);
+
+        const float delay_top = kMenuTop + kMenuRow;
+        middle = delay_top + row_height / 2;
+        const bool focused = row(-1, delay_top);
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
         nvgFontFace(vg_, "medium");
         nvgFontSize(vg_, units(1.15f));
@@ -568,7 +718,7 @@ void PlayerScreen::draw_menu()
         nvgFontFace(vg_, "semibold");
         nvgFillColor(vg_, foreground(1.0f));
         nvgText(vg_, row_left + row_width - units(1.2f), middle, shown.c_str(), nullptr);
-        list_top += kMenuRow + units(0.6f);
+        list_top += 2 * kMenuRow + units(0.6f);
     }
 
     const std::vector<TrackOption> &options = menu_options();
@@ -646,6 +796,7 @@ void PlayerScreen::draw()
         draw_spinner(centre_x, centre_y, units(2.0f), busy_);
     if (controls_ < 0.01f)
     {
+        draw_calibration();
         draw_menu();
         return;
     }
@@ -744,6 +895,7 @@ void PlayerScreen::draw()
         draw_control(static_cast<Control>(index), x, kRowMiddle, kButton, focused(index), shown);
         x += kButtonPitch;
     }
+    draw_calibration();
     draw_menu();
 }
 } // namespace ui

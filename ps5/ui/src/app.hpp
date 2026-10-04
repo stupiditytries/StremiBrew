@@ -13,6 +13,7 @@
 #include "board_data.hpp"
 #include "details_data.hpp"
 #include "player_screen.hpp"
+#include "speech_models.hpp"
 
 struct NVGcontext;
 
@@ -32,6 +33,7 @@ enum class Button
     Back,
     SkipBack,    // L1: in the player, back 15 seconds
     SkipForward, // R1: forward 15 seconds
+    Calibrate,   // triangle held: in the player, time the subtitles to the dialogue
 };
 
 // Sound effects the host plays as the user gets about.
@@ -98,13 +100,25 @@ class App
     // the controls over it, from what the host reports with set_playback.
     void set_player_handler(PlayerHandler handler);
     void set_playback(const Playback &playback);
+    // How far through being held the calibrate button (triangle) is, 0 to 1; the host
+    // sends Button::Calibrate when it gets there.
+    void set_calibrate_hold(float progress);
     void set_player_tracks(PlayerTracks tracks);
     // Called when the preferred audio or subtitle language is changed in Settings
     // (three-letter codes; an empty subtitle language is "off").
     // How subtitles look: set at start-up from what the host saved, and handed back to
     // the host to save when it is changed in Settings.
     void set_subtitle_style(const SubtitleStyle &style);
+    const SubtitleStyle &subtitle_style() const
+    {
+        return subtitle_style_;
+    }
     void set_subtitle_style_handler(std::function<void(const SubtitleStyle &)> handler);
+    // The speech models for auto-calibrate: what the host has, and what Settings asks of
+    // it (use this model; download this model).
+    void set_speech_models(const SpeechModels &models);
+    void set_speech_handlers(std::function<void(int model)> choose,
+                             std::function<void(int model)> download);
     void set_languages_handler(
         std::function<void(const std::string &audio, const std::string &subtitles)> handler);
     bool player_open() const
@@ -173,8 +187,15 @@ class App
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
     std::function<void(const std::string &, const std::string &)> languages_;
-    // Settings: the account button, the two language rows, the four subtitle style rows.
+    // Settings, in the order the focus goes through them: the account button (0), the
+    // two language rows (1, 2), auto-calibrate's model, download and offset (3 to 5), and
+    // the four subtitle style rows (6 to 9).
     int content_focus_ = 0;
+    SpeechModels speech_;
+    // Changing the speech model slides its name and its download status in from the side
+    // the change came from: how far off they still are, and how visible.
+    float speech_shift_ = 0, speech_alpha_ = 1;
+    std::function<void(int)> choose_speech_, download_speech_;
     SubtitleStyle subtitle_style_;
     std::function<void(const SubtitleStyle &)> subtitle_style_handler_;
 

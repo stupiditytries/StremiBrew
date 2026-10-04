@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +32,9 @@ class PlayControl
                const std::string &video);
     // What the player's controls call.
     ui::PlayerHandler handler();
+    // Where auto-calibrate gets the speech model's file (empty when it is not on the
+    // console) and the offset to add to what it finds, in milliseconds.
+    void set_calibration_sources(std::function<std::string()> model, std::function<int()> offset);
     // Once a frame, with the framebuffer to draw into bound and before the UI is drawn:
     // draws the picture and brings the UI up to date.
     void frame(int width, int height);
@@ -58,6 +62,8 @@ class PlayControl
     Remembered recall(const std::string &title) const;
     void remember();
     void show_preview(ui::Playback &status);
+    void calibrate();
+    void follow_calibration();
     void rebuild_tracks();
     void close();
 
@@ -73,6 +79,10 @@ class PlayControl
     int subtitle_selected_ = 0;
     double subtitle_delay_ = 0;
     bool subtitle_chosen_ = false; // by the user or automatically; stops later automatic picks
+    std::function<std::string()> speech_model_;
+    std::function<int()> calibration_offset_;
+    ui::Calibration calibration_;
+    double calibration_shown_ = 0; // when its result went up
     std::string title_;       // the title playing, which choices are remembered under
     Remembered remembered_;   // what is on file for it
     bool audio_applied_ = false;

@@ -11,6 +11,7 @@
 
 #include <GL/gl.h>
 
+#include "calibrate.hpp"
 #include "languages.hpp"
 #include "nanovg.h"
 #define NANOVG_GL3 1
@@ -184,6 +185,8 @@ struct PlayControl::Shared
     int wanted = 0; // the latest subtitle file asked for; older answers are dropped
     bool loaded = false;
     std::vector<Cue> cues;
+    bool calibrated = false; // a calibration has finished
+    CalibrationResult calibration;
 };
 
 PlayControl::PlayControl(ui::App &app, CoreLink &core, NVGcontext *vg) : app_{app}, core_{core}, vg_{vg}
@@ -261,6 +264,7 @@ void PlayControl::start(const ui::Stream &stream, const std::string &type, const
     subtitle_chosen_ = remembered_.subtitles == 1;
     preview_index_ = -1;
     preview_asked_ = -1;
+    calibration_ = ui::Calibration{};
     reported_start_ = reported_paused_ = reported_end_ = false;
     reported_at_ = 0;
 
@@ -332,6 +336,7 @@ ui::PlayerHandler PlayControl::handler()
         rebuild_tracks();
     };
     handler.preview = [this](double seconds) { preview_asked_ = seconds; };
+    handler.calibrate = [this] { calibrate(); };
     return handler;
 }
 
@@ -432,6 +437,8 @@ void PlayControl::frame(int width, int height)
     ui::Playback status = player_.status();
 
     show_preview(status);
+    follow_calibration();
+    status.calibration = calibration_;
 
     // The tracks, once the video has opened; the preferred subtitle language is picked
     // from the video's own tracks when it has one.
@@ -599,5 +606,92 @@ void PlayControl::show_preview(ui::Playback &status)
     preview_time_ = time;
     status.preview_image = preview_image_;
     status.preview_time = preview_time_;
+}
+void PlayControl::set_calibration_sources(std::function<std::string()> model, std::function<int()> offset)
+{
+    speech_model_ = std::move(model);
+    calibration_offset_ = std::move(offset);
+}
+
+// Starts a calibration: the next ten seconds of sound are copied as they play.
+void PlayControl::calibrate()
+{
+    using State = ui::Calibration::State;
+    if (calibration_.state == State::Listening || calibration_.state == State::Working)
+        return;
+    const auto refuse = [&](const char *why) {
+        calibration_.state = State::Failed;
+        calibration_.message = why;
+        calibration_shown_ = now_seconds();
+    };
+    calibration_ = ui::Calibration{};
+    if (player_.subtitles().empty())
+        return refuse("Turn subtitles on first");
+    if (!speech_model_ || speech_model_().empty())
+        return refuse("Download a speech model in Settings first");
+    player_.capture_audio(10.0);
+    calibration_.state = State::Listening;
+}
+
+// Moves a calibration along: listening, then the recognition (on a thread of its own),
+// then the result, which sets the subtitles' delay.
+void PlayControl::follow_calibration()
+{
+    using State = ui::Calibration::State;
+    const auto finish = [&](State state, const std::string &message) {
+        calibration_.state = state;
+        calibration_.message = message;
+        calibration_shown_ = now_seconds();
+    };
+    if (calibration_.state == State::Listening)
+    {
+        const float progress = player_.capture_state();
+        if (progress < 0)
+            return finish(State::Failed, "Calibration stopped: the video was paused or moved");
+        calibration_.progress = std::min(progress, 1.0f);
+        std::vector<float> samples;
+        double start = 0;
+        if (progress >= 2.0f && player_.take_capture(samples, start) && shared_ != nullptr)
+        {
+            calibration_.state = State::Working;
+            const ui::Language *language = ui::find_language(player_.audio_language());
+            std::thread{[shared = shared_, samples = std::move(samples), start, cues = player_.subtitles(),
+                         model = speech_model_(), spoken = std::string{language != nullptr ? language->brief : ""}] {
+                const CalibrationResult result = ps5::calibrate(model, samples, start, cues, spoken);
+                std::lock_guard lock{shared->mutex};
+                shared->calibration = result;
+                shared->calibrated = true;
+            }}.detach();
+        }
+    }
+    else if (calibration_.state == State::Working && shared_ != nullptr)
+    {
+        CalibrationResult result;
+        {
+            std::lock_guard lock{shared_->mutex};
+            if (!shared_->calibrated)
+                return;
+            shared_->calibrated = false;
+            result = shared_->calibration;
+        }
+        if (!result.found)
+            return finish(State::Failed, result.message);
+        // To the nearest twentieth of a second, plus the offset from Settings.
+        const double offset = calibration_offset_ ? calibration_offset_() / 1000.0 : 0.0;
+        const double delay = std::round((result.delay + offset) * 20.0) / 20.0;
+        log_line("calibrate: subtitles set to %+.2f s (%d words agreed)", delay, result.matches);
+        subtitle_delay_ = delay;
+        player_.set_subtitle_delay(delay);
+        remembered_.delay = static_cast<int>(delay * 1000.0 + (delay < 0 ? -0.5 : 0.5));
+        remember();
+        rebuild_tracks();
+        calibration_.delay = delay;
+        finish(State::Done, {});
+    }
+    else if ((calibration_.state == State::Done || calibration_.state == State::Failed) &&
+             now_seconds() - calibration_shown_ > 8.0)
+    {
+        calibration_ = ui::Calibration{};
+    }
 }
 } // namespace ps5

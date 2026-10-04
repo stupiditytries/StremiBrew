@@ -431,3 +431,60 @@ pub extern "C" fn stremio_http_get(url: *const c_char, out: *mut u8, capacity: u
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
     bytes.len() as i64
 }
+
+/// Downloads a large file (a speech model) to `path`, by way of `path` + ".part" so a
+/// download cut short never looks like the whole file. `done` and `total` are counters
+/// the caller watches for progress: bytes so far, and the file's size once it is known.
+/// Returns 0 when the file is in place.
+#[no_mangle]
+pub extern "C" fn stremio_http_download(
+    url: *const c_char,
+    path: *const c_char,
+    done: *mut u64,
+    total: *mut u64,
+) -> i32 {
+    if url.is_null() || path.is_null() || done.is_null() || total.is_null() {
+        return -1;
+    }
+    let (Ok(url), Ok(path)) = (
+        unsafe { CStr::from_ptr(url) }.to_str(),
+        unsafe { CStr::from_ptr(path) }.to_str(),
+    ) else {
+        return -1;
+    };
+    let fetched = (|| -> Result<(), String> {
+        let response = HTTP.get(url).call().map_err(|error| error.to_string())?;
+        let size = response
+            .header("Content-Length")
+            .and_then(|length| length.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        unsafe { total.write_volatile(size) };
+        let part = format!("{path}.part");
+        let mut file = File::create(&part).map_err(|error| error.to_string())?;
+        let mut body = response.into_reader();
+        let mut buffer = vec![0u8; 256 * 1024];
+        let mut written = 0u64;
+        loop {
+            let count = body.read(&mut buffer).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            file.write_all(&buffer[..count]).map_err(|error| error.to_string())?;
+            written += count as u64;
+            unsafe { done.write_volatile(written) };
+        }
+        drop(file);
+        if size != 0 && written != size {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("the download stopped at {written} of {size} bytes"));
+        }
+        std::fs::rename(&part, path).map_err(|error| error.to_string())
+    })();
+    match fetched {
+        Ok(()) => 0,
+        Err(error) => {
+            crate::kernel_log(&format!("download failed: {error}"));
+            -1
+        }
+    }
+}

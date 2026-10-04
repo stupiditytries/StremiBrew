@@ -2,6 +2,7 @@
 # Builds the PC preview on Windows (clang with Visual Studio's CMake and Ninja) and, given
 # a file name, saves a screenshot.
 #   preview.sh [shot.png] [keys] [backdrop: soft, light or sharp]
+#              [calibration mock-up: a or b for the look, then l, w, d or f for the state]
 # Sample data comes from build/preview-data (see ps5/core-bridge's board example and
 # tools/fetch_preview_images.py).
 set -euo pipefail
@@ -24,6 +25,6 @@ fi
 if [[ $# -ge 1 ]]; then
     "$build/stremio_preview.exe" "$repo/build/preview-data/board.json" \
         "$repo/build/preview-data/images" "$repo/ps5/ui/assets/fonts" \
-        --shot "$1" --keys "${2:-}" ${3:+--backdrop "$3"}
+        --shot "$1" --keys "${2:-}" ${3:+--backdrop "$3"} ${4:+--calibrate "$4"}
     ls -la "$1"
 fi

@@ -549,6 +549,14 @@ struct Player::Session
     bool audio_swapping = false, audio_parked = false;
     std::vector<Cue> cues; // the subtitles on hand, in order of their start
     double subtitle_delay = 0;
+    // A copy being taken of the sound as it plays (see Player::capture_audio).
+    bool capturing = false, capture_failed = false, capture_complete = false;
+    std::size_t capture_wanted = 0;
+    std::vector<float> captured;
+    double capture_start = 0;
+    int capture_serial = 0;
+    float capture_sum = 0;
+    int capture_count = 0;
     // The scrubbing pictures: one for each `thumb_every` seconds of the video, made in
     // the background from when the video opens (an empty one is not made yet).
     std::vector<std::vector<std::uint8_t>> thumbs;
@@ -1124,6 +1132,37 @@ struct Player::Session
             sceAudioOutOutput(handle, pcm.data() + played);
             {
                 std::lock_guard lock{mutex};
+                if (capturing)
+                {
+                    // The block just played joins the copy: its two channels as one, and
+                    // every three samples as one (48,000 a second down to 16,000).
+                    if (captured.empty() && capture_count == 0)
+                    {
+                        capture_start = pcm_pts;
+                        capture_serial = serial;
+                    }
+                    if (capture_serial != serial)
+                    {
+                        capturing = false;
+                        capture_failed = true;
+                    }
+                    const std::int16_t *block = pcm.data() + played;
+                    for (std::size_t frame_index = 0; capturing && frame_index < kAudioGrain; ++frame_index)
+                    {
+                        capture_sum += static_cast<float>(block[frame_index * 2] + block[frame_index * 2 + 1]);
+                        if (++capture_count == 3)
+                        {
+                            captured.push_back(capture_sum / (6.0f * 32768.0f));
+                            capture_sum = 0;
+                            capture_count = 0;
+                            if (captured.size() >= capture_wanted)
+                            {
+                                capturing = false;
+                                capture_complete = true;
+                            }
+                        }
+                    }
+                }
                 if (mine == serial)
                 {
                     clock_pts = pcm_pts;
@@ -1474,6 +1513,69 @@ void Player::set_external_subtitles(std::vector<Cue> cues)
     session_->subtitle_wanted = -1;
     session_->cues = std::move(cues);
     session_->wake.notify_all();
+}
+
+std::vector<Cue> Player::subtitles() const
+{
+    if (session_ == nullptr)
+        return {};
+    std::lock_guard lock{session_->mutex};
+    return session_->cues;
+}
+
+std::string Player::audio_language() const
+{
+    if (session_ == nullptr)
+        return {};
+    std::lock_guard lock{session_->mutex};
+    const int choice = session_->audio_choice;
+    return choice >= 0 && choice < static_cast<int>(session_->audio_infos.size())
+               ? session_->audio_infos[static_cast<std::size_t>(choice)].language
+               : std::string{};
+}
+
+void Player::capture_audio(double seconds)
+{
+    if (session_ == nullptr)
+        return;
+    std::lock_guard lock{session_->mutex};
+    Session &session = *session_;
+    session.captured.clear();
+    session.capture_sum = 0;
+    session.capture_count = 0;
+    session.capture_wanted = static_cast<std::size_t>(seconds * 16000.0);
+    session.capture_complete = false;
+    // Without sound being played there is nothing to copy.
+    session.capture_failed = !session.has_audio || session.paused;
+    session.capturing = !session.capture_failed;
+}
+
+float Player::capture_state() const
+{
+    if (session_ == nullptr)
+        return -1.0f;
+    std::lock_guard lock{session_->mutex};
+    const Session &session = *session_;
+    if (session.capture_complete)
+        return 2.0f;
+    if (session.capture_failed || !session.capturing || session.paused)
+        return -1.0f;
+    return static_cast<float>(session.captured.size()) /
+           static_cast<float>(std::max<std::size_t>(1, session.capture_wanted));
+}
+
+bool Player::take_capture(std::vector<float> &samples, double &start)
+{
+    if (session_ == nullptr)
+        return false;
+    std::lock_guard lock{session_->mutex};
+    if (!session_->capture_complete)
+        return false;
+    session_->capture_complete = false;
+    samples = std::move(session_->captured);
+    session_->captured.clear();
+    start = session_->capture_start;
+    return true;
 }
 
 void Player::set_subtitle_delay(double seconds)

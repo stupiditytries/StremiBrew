@@ -21,6 +21,8 @@ constexpr std::size_t kStateSize = 120;
 constexpr std::uint32_t kUp = 0x0010, kRight = 0x0020, kDown = 0x0040, kLeft = 0x0080;
 constexpr std::uint32_t kCircle = 0x2000, kCross = 0x4000;
 constexpr std::uint32_t kL1 = 0x0400, kR1 = 0x0800;
+constexpr std::uint32_t kTriangle = 0x1000;
+constexpr float kHoldTime = 0.8f; // seconds the triangle is held before it acts
 constexpr std::uint32_t kDirections = kUp | kRight | kDown | kLeft;
 constexpr int kStickThreshold = 70; // how far from centre the stick counts as a direction
 
@@ -79,6 +81,21 @@ void Pad::poll(float seconds, const std::function<void(ui::Button)> &press)
             press(ui::Button::SkipForward);
     };
 
+    if (buttons & kTriangle)
+    {
+        triangle_for_ += seconds;
+        if (triangle_for_ >= kHoldTime && !triangle_sent_)
+        {
+            triangle_sent_ = true;
+            press(ui::Button::Calibrate);
+        }
+    }
+    else
+    {
+        triangle_for_ = 0;
+        triangle_sent_ = false;
+    }
+
     const std::uint32_t pressed = down & ~held_;
     send(pressed);
     if (pressed & kDirections)
@@ -101,5 +118,9 @@ void Pad::poll(float seconds, const std::function<void(ui::Button)> &press)
         }
     }
     held_ = down;
+}
+float Pad::hold_progress() const
+{
+    return triangle_sent_ ? 0.0f : triangle_for_ / kHoldTime;
 }
 } // namespace ps5

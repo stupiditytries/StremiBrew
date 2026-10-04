@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "details_screen.hpp"
 #include "draw_util.hpp"
@@ -207,6 +208,11 @@ void App::set_playback(const Playback &playback)
         close_player();
 }
 
+void App::set_calibrate_hold(float progress)
+{
+    player_->set_hold(player_open_ ? progress : 0.0f);
+}
+
 void App::set_player_tracks(PlayerTracks tracks)
 {
     if (player_open_)
@@ -217,6 +223,18 @@ void App::set_languages_handler(
     std::function<void(const std::string &audio, const std::string &subtitles)> handler)
 {
     languages_ = std::move(handler);
+}
+
+void App::set_speech_models(const SpeechModels &models)
+{
+    speech_ = models;
+}
+
+void App::set_speech_handlers(std::function<void(int model)> choose,
+                              std::function<void(int model)> download)
+{
+    choose_speech_ = std::move(choose);
+    download_speech_ = std::move(download);
 }
 
 void App::set_subtitle_style(const SubtitleStyle &style)
@@ -235,7 +253,9 @@ void App::set_subtitle_style_handler(std::function<void(const SubtitleStyle &)> 
 void App::change_subtitle_style(int row, int step)
 {
     SubtitleStyle &style = subtitle_style_;
-    if (row == 3)
+    if (row == 7)
+        style.calibration_offset = std::clamp(style.calibration_offset + step * 50, -3000, 3000);
+    else if (row == 3)
         style.size = std::clamp(style.size + step * 25, 50, 200);
     else if (row == 4)
         style.background = std::clamp(style.background + step * 20, 0, 100);
@@ -295,9 +315,11 @@ std::size_t App::focus_mark() const
     add(veil_rising_);
     add(title_open_ ? details_->focus_mark() : 0);
     add(static_cast<std::size_t>(content_focus_));
+    add(static_cast<std::size_t>(speech_.chosen));
     add(std::hash<std::string>{}(account_.audio_language + '/' + account_.subtitles_language));
     add(static_cast<std::size_t>(subtitle_style_.size * 7 + subtitle_style_.background * 131 +
-                                 subtitle_style_.colour * 1009 + (subtitle_style_.bold ? 5003 : 0)));
+                                 subtitle_style_.colour * 1009 + (subtitle_style_.bold ? 5003 : 0) +
+                                 subtitle_style_.calibration_offset * 31));
     return mark;
 }
 
@@ -344,11 +366,28 @@ void App::apply(Button button)
     case Zone::Content:
         if (button == Button::Up && content_focus_ > 0)
             --content_focus_;
-        else if (button == Button::Down && content_focus_ < 6)
+        else if (button == Button::Down && content_focus_ < 9)
             ++content_focus_;
-        else if (content_focus_ > 2 && (button == Button::Left || button == Button::Right ||
-                                        button == Button::Accept))
-            change_subtitle_style(content_focus_, button == Button::Left ? -1 : 1);
+        else if (content_focus_ == 3 && (button == Button::Left || button == Button::Right ||
+                                         button == Button::Accept))
+        {
+            speech_.chosen = ((speech_.chosen + (button == Button::Left ? -1 : 1)) % kSpeechModelCount +
+                              kSpeechModelCount) % kSpeechModelCount;
+            speech_shift_ = button == Button::Left ? -units(1.6f) : units(1.6f);
+            speech_alpha_ = 0;
+            if (choose_speech_)
+                choose_speech_(speech_.chosen);
+        }
+        else if (content_focus_ == 4 && button == Button::Accept)
+        {
+            if (!speech_.ready[speech_.chosen] && speech_.downloading < 0 && download_speech_)
+                download_speech_(speech_.chosen);
+        }
+        else if (content_focus_ >= 5 && (button == Button::Left || button == Button::Right ||
+                                         button == Button::Accept))
+            // Row 5 is the calibration offset (7 to that function); 6 to 9 are its 3 to 6.
+            change_subtitle_style(content_focus_ == 5 ? 7 : content_focus_ - 3,
+                                  button == Button::Left ? -1 : 1);
         else if (content_focus_ > 0 && (button == Button::Left || button == Button::Right ||
                                         button == Button::Accept))
             change_language(content_focus_ == 2, button == Button::Left ? -1 : 1);
@@ -451,6 +490,8 @@ void App::update(float seconds)
         player_->update(seconds);
     else
         player_leaving_ = std::max(0.0f, player_leaving_ - seconds / 0.35f);
+    speech_shift_ = eased(speech_shift_, 0.0f, seconds);
+    speech_alpha_ = std::min(1.0f, speech_alpha_ + seconds / 0.22f);
     if (title_open_)
         details_->update(seconds);
     constexpr float kVeilTime = 0.12f;
@@ -979,6 +1020,8 @@ void App::draw_settings()
     nvgFillColor(vg_, foreground());
     nvgText(vg_, left, top, "Playback", nullptr);
     top += kRowTitleSize * 1.2f + units(1.0f);
+    // A row's value can be drawn part-way through sliding in (see speech_shift_).
+    float value_shift = 0, value_alpha = 1;
     const auto choice = [&](int index, const char *label, const std::string &value) {
         const bool chosen = zone_ == Zone::Content && content_focus_ == index;
         const float row_width = units(30.0f), row_height = units(3.25f);
@@ -996,16 +1039,94 @@ void App::draw_settings()
         nvgText(vg_, left + units(1.2f), middle, label, nullptr);
         nvgFontFace(vg_, "semibold");
         nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
-        nvgFillColor(vg_, foreground(1.0f));
-        // Arrows either side of the value show that left and right change it.
-        const std::string shown = chosen ? "\xE2\x80\xB9   " + value + "   \xE2\x80\xBA" : value;
-        nvgText(vg_, left + row_width - units(1.2f), middle, shown.c_str(), nullptr);
+        nvgFillColor(vg_, foreground(value_alpha));
+        // Arrows either side of the value show that left and right change it. They stay
+        // put while a value slides in between them.
+        if (chosen)
+        {
+            const float value_width = nvgTextBounds(vg_, 0, 0, value.c_str(), nullptr, nullptr);
+            const float right = left + row_width - units(1.2f);
+            nvgFillColor(vg_, foreground(1.0f));
+            nvgText(vg_, right, middle, "\xE2\x80\xBA", nullptr);
+            const float arrow = nvgTextBounds(vg_, 0, 0, "\xE2\x80\xBA", nullptr, nullptr) + units(0.7f);
+            nvgText(vg_, right - arrow - value_width - units(0.7f), middle, "\xE2\x80\xB9", nullptr);
+            nvgFillColor(vg_, foreground(value_alpha));
+            nvgText(vg_, right - arrow + value_shift, middle, value.c_str(), nullptr);
+        }
+        else
+        {
+            nvgText(vg_, left + row_width - units(1.2f) + value_shift, middle, value.c_str(), nullptr);
+        }
         top += row_height + units(0.6f);
     };
     choice(1, "Audio language", language_name(account_.audio_language));
     choice(2, "Subtitles",
            account_.subtitles_language.empty() ? std::string{"Off"}
                                                : language_name(account_.subtitles_language));
+
+    // Auto-calibrate: the speech model it listens with, fetching that model, and an
+    // offset added to whatever it finds.
+    top += units(2.0f);
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, kRowTitleSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground());
+    nvgText(vg_, left, top, "Subtitle auto-calibrate", nullptr);
+    top += kRowTitleSize * 1.2f + units(1.0f);
+    const SpeechModel &model = kSpeechModels[speech_.chosen];
+    value_shift = speech_shift_;
+    value_alpha = speech_alpha_;
+    choice(3, "Speech model", std::string{model.name} + "  \xC2\xB7  " + model.size);
+    value_shift = 0;
+    value_alpha = 1;
+    {
+        // The chosen model's state, and the button that fetches it.
+        const bool chosen = zone_ == Zone::Content && content_focus_ == 4;
+        const bool ready = speech_.ready[speech_.chosen];
+        const bool busy = speech_.downloading == speech_.chosen;
+        const float row_width = units(30.0f), row_height = units(3.25f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, left, top, row_width, row_height, kRadius);
+        nvgFillColor(vg_, overlay(chosen ? 3.0f : 1.6f));
+        nvgFill(vg_);
+        if (busy)
+        {
+            // The row fills from the left as the download goes.
+            nvgSave(vg_);
+            nvgScissor(vg_, left, top, row_width * static_cast<float>(speech_.progress) / 100.0f, row_height);
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, left, top, row_width, row_height, kRadius);
+            nvgFillColor(vg_, accent(0.45f));
+            nvgFill(vg_);
+            nvgRestore(vg_);
+        }
+        if (chosen)
+            focus_ring(vg_, left, top, row_width, row_height, kRadius);
+        const float middle = top + row_height / 2;
+        nvgFontFace(vg_, "regular");
+        nvgFontSize(vg_, units(1.15f));
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg_, foreground(0.75f));
+        nvgText(vg_, left + units(1.2f), middle, "Download Status", nullptr);
+        // The chosen model's status slides in with its name when the model is changed.
+        nvgFontFace(vg_, "semibold");
+        nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+        const std::string status = busy    ? std::to_string(speech_.progress) + "%"
+                                   : ready ? "Downloaded"
+                                   : speech_.downloading >= 0 ? "Waiting for the other download"
+                                   : !speech_.error.empty()   ? "Failed  \xC2\xB7  Try again"
+                                                              : "Not downloaded  \xC2\xB7  Download";
+        NVGcolor colour = ready ? accent() : foreground(1.0f);
+        colour.a *= speech_alpha_;
+        nvgFillColor(vg_, colour);
+        nvgText(vg_, left + row_width - units(1.2f) + speech_shift_, middle, status.c_str(), nullptr);
+        top += row_height + units(0.6f);
+    }
+    {
+        char amount[24];
+        std::snprintf(amount, sizeof amount, "%+.2f s", subtitle_style_.calibration_offset / 1000.0);
+        choice(5, "Calibration Offset", amount);
+    }
 
     // A second column: how subtitles look, with a sample.
     left += units(36.0f);
@@ -1017,10 +1138,10 @@ void App::draw_settings()
     nvgText(vg_, left, top, "Subtitle style", nullptr);
     top += kRowTitleSize * 1.2f + units(1.0f);
     const SubtitleStyle &style = subtitle_style_;
-    choice(3, "Size", std::to_string(style.size) + "%");
-    choice(4, "Background", style.background == 0 ? std::string{"None"} : std::to_string(style.background) + "%");
-    choice(5, "Colour", kSubtitleColours[style.colour].name);
-    choice(6, "Weight", style.bold ? "Bold" : "Regular");
+    choice(6, "Size", std::to_string(style.size) + "%");
+    choice(7, "Background", style.background == 0 ? std::string{"None"} : std::to_string(style.background) + "%");
+    choice(8, "Colour", kSubtitleColours[style.colour].name);
+    choice(9, "Weight", style.bold ? "Bold" : "Regular");
     // The sample sits on a patch of mid grey, standing in for a picture.
     top += units(0.6f);
     const float sample_width = units(30.0f), sample_height = units(8.0f);

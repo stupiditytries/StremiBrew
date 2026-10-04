@@ -3,7 +3,10 @@
 // Progress and failures are written to /download0/app.log, one line at a time, so a
 // start-up problem can be read back after the fact.
 
+#include <atomic>
 #include <cstddef>
+#include <memory>
+#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -53,6 +56,8 @@ extern "C"
     std::size_t stremio_core_details(char *out, std::size_t capacity);
     void stremio_core_set_languages(const char *audio, const char *subtitles);
     void stremio_http_set_cache(const char *path, std::uint32_t megabytes);
+    std::int32_t stremio_http_download(const char *url, const char *path, std::uint64_t *done,
+                                       std::uint64_t *total);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
     int sceKernelDebugOutText(int channel, const char *text);
 }
@@ -347,33 +352,94 @@ int main()
         },
     });
     app.set_player_handler(playing.handler());
-    // How subtitles look is kept in a small file of the app's own: four whole numbers.
+    // How subtitles look, the calibration offset and the speech model in use are kept
+    // in a small file of the app's own: six whole numbers.
     static constexpr char kSubtitleStyleFile[] = "/download0/stremio/subtitle-style.txt";
+    static constexpr char kModelFolder[] = "/download0/stremio/models";
+    static ui::SpeechModels speech;
+    const auto save_choices = [&app] {
+        const ui::SubtitleStyle &style = app.subtitle_style();
+        if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
+        {
+            std::fprintf(file, "%d %d %d %d %d %d\n", style.size, style.background, style.colour,
+                         style.bold ? 1 : 0, style.calibration_offset, speech.chosen);
+            std::fclose(file);
+        }
+    };
     {
         ui::SubtitleStyle style;
-        int bold = 0;
         if (std::FILE *file = std::fopen(kSubtitleStyleFile, "r"))
         {
             ui::SubtitleStyle saved;
-            if (std::fscanf(file, "%d %d %d %d", &saved.size, &saved.background, &saved.colour, &bold) == 4 &&
-                saved.size >= 50 && saved.size <= 200 && saved.background >= 0 &&
+            int bold = 0, model = 0;
+            const int read = std::fscanf(file, "%d %d %d %d %d %d", &saved.size, &saved.background,
+                                         &saved.colour, &bold, &saved.calibration_offset, &model);
+            if (read >= 4 && saved.size >= 50 && saved.size <= 200 && saved.background >= 0 &&
                 saved.background <= 100 && saved.colour >= 0 &&
                 saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
             {
                 saved.bold = bold != 0;
+                if (read < 5 || saved.calibration_offset < -3000 || saved.calibration_offset > 3000)
+                    saved.calibration_offset = 0;
+                if (read == 6 && model >= 0 && model < ui::kSpeechModelCount)
+                    speech.chosen = model;
                 style = saved;
             }
             std::fclose(file);
         }
         app.set_subtitle_style(style);
     }
-    app.set_subtitle_style_handler([](const ui::SubtitleStyle &style) {
-        if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
+    app.set_subtitle_style_handler([save_choices](const ui::SubtitleStyle &) { save_choices(); });
+
+    // The speech models for auto-calibrate live in a folder of the app's data; one is on
+    // the console when its file is there.
+    mkdir("/download0/stremio", 0777);
+    mkdir(kModelFolder, 0777);
+    const auto model_file = [](int model) {
+        return std::string{kModelFolder} + "/" + ui::kSpeechModels[model].file;
+    };
+    const auto find_models = [model_file] {
+        for (int model = 0; model < ui::kSpeechModelCount; ++model)
         {
-            std::fprintf(file, "%d %d %d %d\n", style.size, style.background, style.colour, style.bold ? 1 : 0);
-            std::fclose(file);
+            struct stat found{};
+            speech.ready[model] = stat(model_file(model).c_str(), &found) == 0 && found.st_size > (1 << 20);
         }
-    });
+    };
+    find_models();
+    app.set_speech_models(speech);
+    // A download in progress: the thread doing it reports through these.
+    struct Download
+    {
+        std::uint64_t done = 0, total = 0; // written by the bridge as it goes
+        std::atomic<int> outcome{0};       // 1 finished, -1 failed
+    };
+    static std::shared_ptr<Download> download;
+    app.set_speech_handlers(
+        [&app, save_choices](int model) {
+            speech.chosen = model;
+            speech.error.clear();
+            app.set_speech_models(speech);
+            save_choices();
+        },
+        [&app, model_file](int model) {
+            if (download != nullptr)
+                return;
+            download = std::make_shared<Download>();
+            speech.downloading = model;
+            speech.progress = 0;
+            speech.error.clear();
+            app.set_speech_models(speech);
+            const std::string address =
+                std::string{"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"} + ui::kSpeechModels[model].file;
+            log_line("downloading %s", address.c_str());
+            std::thread{[state = download, address, path = model_file(model)] {
+                const int result = stremio_http_download(address.c_str(), path.c_str(), &state->done, &state->total);
+                state->outcome = result == 0 ? 1 : -1;
+            }}.detach();
+        });
+    playing.set_calibration_sources(
+        [model_file] { return speech.ready[speech.chosen] ? model_file(speech.chosen) : std::string{}; },
+        [&app] { return app.subtitle_style().calibration_offset; });
     app.set_languages_handler([&core](const std::string &audio, const std::string &subtitles) {
         core.post([audio, subtitles] { stremio_core_set_languages(audio.c_str(), subtitles.c_str()); });
     });
@@ -431,6 +497,29 @@ int main()
         const float elapsed = static_cast<float>(now - previous);
         previous = now;
         pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
+        app.set_calibrate_hold(pad.hold_progress());
+        if (download != nullptr)
+        {
+            // A speech model on its way: how far, and what became of it.
+            const int outcome = download->outcome;
+            const std::uint64_t total = download->total;
+            const int progress = total > 0 ? static_cast<int>(download->done * 100 / total) : 0;
+            if (outcome != 0)
+            {
+                log_line("speech model download %s", outcome > 0 ? "finished" : "failed");
+                if (outcome < 0)
+                    speech.error = "The download failed. Try again.";
+                speech.downloading = -1;
+                download.reset();
+                find_models();
+                app.set_speech_models(speech);
+            }
+            else if (progress != speech.progress)
+            {
+                speech.progress = progress;
+                app.set_speech_models(speech);
+            }
+        }
         const double applied = seconds_now();
 
         canvas.begin();

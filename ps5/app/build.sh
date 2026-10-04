@@ -17,6 +17,8 @@ sdk=$TEMPLATE/.deps/native/ps5-payload-sdk
 out=$WORK/app
 # FFmpeg's libraries for the console (see ps5/ffmpeg/build.sh).
 ffmpeg=$WORK/ffmpeg-ps5/install
+# whisper.cpp's source tree (speech recognition, for timing subtitles to the dialogue).
+WHISPER=${WHISPER:-$WORK/whisper/whisper.cpp}
 title_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["titleId"])' \
     "$REPO/ps5/app/sce_sys/param.json")
 mkdir -p "$out/obj" "$out/stubs" "$WORK/bin"
@@ -45,11 +47,19 @@ export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
 ui=$REPO/ps5/ui
 includes=(-I"$ui/src" -I"$ui/third_party/nanovg" -I"$ui/third_party"
     -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp"
-    -I"$GL_SDK/include" -I"$ffmpeg/include" -DGL_GLEXT_PROTOTYPES=1)
+    -I"$GL_SDK/include" -I"$ffmpeg/include" -I"$WHISPER/include" -I"$WHISPER/ggml/include"
+    -DGL_GLEXT_PROTOTYPES=1)
 common=(-O2 -ffunction-sections -fdata-sections "${includes[@]}")
 sources=("$REPO"/ps5/app/src/*.cpp "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c"
     "$REPO"/ps5/spike-app/src/compat*.c "$REPO/ps5/runtime/heap.c" "$REPO/ps5/runtime/abort.cpp"
+    "$REPO/ps5/runtime/no_exec.c"
     "$TEMPLATE/tooling/native/app_crt.cpp")
+sources+=("$WHISPER/src/whisper.cpp" "$WHISPER"/ggml/src/ggml.c "$WHISPER"/ggml/src/ggml-alloc.c
+    "$WHISPER"/ggml/src/ggml-quants.c "$WHISPER"/ggml/src/ggml.cpp "$WHISPER"/ggml/src/ggml-backend.cpp
+    "$WHISPER"/ggml/src/ggml-backend-reg.cpp "$WHISPER"/ggml/src/ggml-opt.cpp
+    "$WHISPER"/ggml/src/ggml-threading.cpp "$WHISPER"/ggml/src/gguf.cpp
+    "$WHISPER"/ggml/src/ggml-cpu/*.c "$WHISPER"/ggml/src/ggml-cpu/*.cpp
+    "$WHISPER"/ggml/src/ggml-cpu/arch/x86/*.c "$WHISPER"/ggml/src/ggml-cpu/arch/x86/*.cpp)
 while IFS= read -r file; do
     sources+=("$file")
 done < <(find "$ui/third_party/libwebp/src/dec" "$ui/third_party/libwebp/src/dsp" \
@@ -63,11 +73,19 @@ compile() {
     # compiled every time: they include each other's headers, and an object built against
     # an older header (a class that has since gained a member, say) links without complaint
     # and then corrupts memory at run time.
-    if [[ $source == */third_party/* && $object -nt $source &&
+    if [[ ($source == */third_party/* || $source == "$WHISPER"/*) && $object -nt $source &&
         $object -nt $REPO/ps5/app/build.sh ]]; then
         return 0
     fi
+    # whisper.cpp is built for the console's processor (AVX2 and FMA are what make it
+    # quick), on its CPU alone, with the C++ exceptions it uses.
+    local whisper=(-O3 -mavx2 -mfma -mf16c -ffunction-sections -fdata-sections -DGGML_USE_CPU -DNDEBUG
+        -D_GNU_SOURCE '-DWHISPER_VERSION="1.7.6"' '-DGGML_VERSION="0"' '-DGGML_COMMIT="0"'
+        -I"$WHISPER/include" -I"$WHISPER/ggml/include" -I"$WHISPER/ggml/src"
+        -I"$WHISPER/ggml/src/ggml-cpu" -I"$WHISPER/src")
     case $source in
+        "$WHISPER"/*.cpp) "$WORK/bin/ps5-cc" -std=c++17 -fexceptions "${whisper[@]}" -c "$source" -o "$object" ;;
+        "$WHISPER"/*.c) "$WORK/bin/ps5-cc" -std=c11 "${whisper[@]}" -c "$source" -o "$object" ;;
         *.cpp) "$WORK/bin/ps5-cc" -std=c++20 -fno-exceptions -fno-rtti "${common[@]}" \
             -c "$source" -o "$object" ;;
         */libwebp/*) "$WORK/bin/ps5-cc" -std=c11 -msse4.1 "${common[@]}" -c "$source" -o "$object" ;;
@@ -76,7 +94,7 @@ compile() {
     esac
 }
 export -f compile
-export out WORK REPO
+export out WORK REPO WHISPER
 declare -p common > "$out/compile-flags.sh"
 running=0
 failed=0
@@ -106,6 +124,7 @@ cp "$sdk"/target/lib/*.so "$GL_SDK/lib/libSceAgc.so" "$GL_SDK/lib/libSceAgcDrive
     -T "$TEMPLATE/tooling/native/ps5-pie.ld" -T "$REPO/ps5/app/unwind.ld" \
     --eh-frame-hdr --gc-sections --version-script "$REPO/ps5/spike-app/app-symbols.map" \
     -e _start -u ps5_agc_gate2_run --error-limit=40 -Map="$out/llvm-pie.map" \
+    --why-extract="$out/why-extract.txt" \
     -o "$out/llvm-pie.elf" "${objects[@]}" \
     --start-group "$out/libstremio_core_ps5.a" -lPS5OpenGL \
     "$ffmpeg/lib/libavformat.a" "$ffmpeg/lib/libavcodec.a" "$ffmpeg/lib/libswresample.a" \
