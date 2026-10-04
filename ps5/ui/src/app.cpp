@@ -230,10 +230,12 @@ void App::set_trailer_handler(TrailerHandler handler)
     trailer_handler_ = std::move(handler);
 }
 
-void App::set_trailer(int image, bool live)
+void App::set_trailer(int image, bool live, float bar_top, float bar_bottom)
 {
     trailer_image_ = image;
     trailer_live_ = live;
+    trailer_bar_top_ = bar_top;
+    trailer_bar_bottom_ = bar_bottom;
 }
 
 void App::set_speech_models(const SpeechModels &models)
@@ -577,7 +579,7 @@ void App::update(float seconds)
     // the rest of the dwell covers); after the dwell it plays; when the focus moves on, or
     // anything else takes the screen, it stops.
     {
-        constexpr float kPrepareAfter = 0.6f, kPlayAfter = 3.0f;
+        constexpr float kPrepareAfter = 0.4f, kPlayAfter = 2.0f;
         const bool browsing = trailers_ && !title_open_ && !veil_rising_ && !player_open_ &&
                               zone_ == Zone::Rows && kTabs[selected_tab_].icon == Icon::Board;
         const std::string wanted = browsing && item != nullptr ? item->id : std::string{};
@@ -588,6 +590,7 @@ void App::update(float seconds)
             trailer_for_ = wanted;
             trailer_dwell_ = 0;
             trailer_prepared_ = trailer_started_ = false;
+            trailer_trim_top_ = trailer_trim_bottom_ = 0;
         }
         else if (!wanted.empty())
         {
@@ -610,6 +613,12 @@ void App::update(float seconds)
                              hero_.id == trailer_for_;
         trailer_alpha_ = showing ? std::min(1.0f, trailer_alpha_ + seconds / 0.7f)
                                  : std::max(0.0f, trailer_alpha_ - seconds / 0.25f);
+        // Black bars are found a moment into a trailer; the zoom past them eases in.
+        if (trailer_live_)
+        {
+            trailer_trim_top_ = eased(trailer_trim_top_, trailer_bar_top_, seconds * 0.3f);
+            trailer_trim_bottom_ = eased(trailer_trim_bottom_, trailer_bar_bottom_, seconds * 0.3f);
+        }
     }
 
     // Artwork the featured area is likely to need next is downloaded ahead of time: the
@@ -847,14 +856,21 @@ void App::draw_hero()
         // The trailer takes the artwork's place, scaled to cover the same area.
         int picture_width = 0, picture_height = 0;
         nvgImageSize(vg_, trailer_image_, &picture_width, &picture_height);
-        const float scale = std::max(image_width / static_cast<float>(std::max(1, picture_width)),
+        // Black bars above and below the picture are zoomed past, so what there is of
+        // the picture fills the area's height (its sides are cropped instead), up to a
+        // limit that keeps a very wide picture from being cropped to its middle.
+        const float kept = std::max(0.5f, 1.0f - trailer_trim_top_ - trailer_trim_bottom_);
+        const float cover = std::max(image_width / static_cast<float>(std::max(1, picture_width)),
                                      image_height / static_cast<float>(std::max(1, picture_height)));
+        const float scale = cover * std::min(1.0f / kept, 1.4f);
         const float shown_width = picture_width * scale, shown_height = picture_height * scale;
+        // The picture's own middle (between its bars) sits on the area's middle.
+        const float middle = (trailer_trim_top_ + (1.0f - trailer_trim_bottom_)) / 2;
         nvgBeginPath(vg_);
         nvgRect(vg_, image_left, 0, image_width, image_height);
         nvgFillPaint(vg_, nvgImagePattern(vg_, image_left + (image_width - shown_width) / 2,
-                                          (image_height - shown_height) / 2, shown_width, shown_height,
-                                          0, trailer_image_, trailer_alpha_ * fade));
+                                          image_height / 2 - middle * shown_height, shown_width,
+                                          shown_height, 0, trailer_image_, trailer_alpha_ * fade));
         nvgFill(vg_);
     }
     if (art || trailer)

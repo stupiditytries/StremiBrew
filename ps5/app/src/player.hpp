@@ -102,6 +102,14 @@ class Player
     bool preview(double seconds, std::vector<std::uint8_t> &pixels, int &width, int &height,
                  int &index, double &time);
 
+    // The picture's shape (width over height), and how much of its height is black bars
+    // at its top and at its bottom (0 to 1 each; 0 until enough pictures have been seen).
+    float picture_aspect() const
+    {
+        return picture_aspect_;
+    }
+    void picture_bars(float &top, float &bottom) const;
+
     // On the drawing thread, with the framebuffer to draw into bound: takes the picture
     // that is due and draws it, fitted to `width` x `height` pixels.
     void draw(int width, int height);
@@ -121,6 +129,10 @@ class Player
     int area_[3][4] = {};
     std::vector<std::uint16_t> packed_;
     bool sheet_sized_ = false;
+    // Black bars: the fewest black rows seen at the top and the bottom of any picture
+    // that had something in it, and how many such pictures have been looked at.
+    void measure_bars(const void *frame);
+    int bar_top_ = 0, bar_bottom_ = 0, bar_frames_ = 0;
 
     bool has_picture_ = false;
     int shown_serial_ = -1;

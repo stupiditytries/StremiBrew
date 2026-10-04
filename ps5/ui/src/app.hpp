@@ -126,9 +126,10 @@ class App
     // The speech models for auto-calibrate: what the host has, and what Settings asks of
     // it (use this model; download this model).
     void set_trailer_handler(TrailerHandler handler);
-    // The image the host draws trailers into (0 until it has one), and whether a trailer
-    // is playing in it now.
-    void set_trailer(int image, bool live);
+    // The image the host draws trailers into (0 until it has one), whether a trailer is
+    // playing in it now, and how much of the image's height is black bars at its top and
+    // bottom (the featured area zooms in past them).
+    void set_trailer(int image, bool live, float bar_top, float bar_bottom);
     // Whether trailers play on the home screen (a Settings switch; the host saves it).
     bool trailer_previews() const
     {
@@ -224,6 +225,8 @@ class App
     int trailer_image_ = 0;
     bool trailer_live_ = false;
     float trailer_alpha_ = 0;
+    float trailer_bar_top_ = 0, trailer_bar_bottom_ = 0; // as reported
+    float trailer_trim_top_ = 0, trailer_trim_bottom_ = 0; // as drawn: they ease to those
     // Changing the speech model slides its name and its download status in from the side
     // the change came from: how far off they still are, and how visible.
     float speech_shift_ = 0, speech_alpha_ = 1;

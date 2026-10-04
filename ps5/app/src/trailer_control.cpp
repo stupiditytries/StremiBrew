@@ -1,5 +1,6 @@
 #include "trailer_control.hpp"
 
+#include <algorithm>
 #include <mutex>
 #include <thread>
 
@@ -131,6 +132,7 @@ void TrailerControl::frame()
         }
     }
     bool live = false;
+    float bar_top = 0, bar_bottom = 0;
     if (opened_ && player_.active())
     {
         if (framebuffer_ == 0 && !create_target())
@@ -149,6 +151,14 @@ void TrailerControl::frame()
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         const ui::Playback status = player_.status();
         live = started_ && status.state == ui::Playback::State::Playing;
+        // The black bars in the texture: the ones a picture wider than the texture
+        // leaves above and below it, and any the picture itself carries.
+        const float shape = player_.picture_aspect();
+        const float filled = std::min(1.0f, (static_cast<float>(kWidth) / kHeight) / std::max(shape, 0.1f));
+        float own_top = 0, own_bottom = 0;
+        player_.picture_bars(own_top, own_bottom);
+        bar_top = (1.0f - filled) / 2 + own_top * filled;
+        bar_bottom = (1.0f - filled) / 2 + own_bottom * filled;
         if (status.state == ui::Playback::State::Ended || status.state == ui::Playback::State::Failed)
         {
             // Over (or it would not play): back to the artwork.
@@ -156,6 +166,6 @@ void TrailerControl::frame()
             opened_ = wanted_ = false;
         }
     }
-    app_.set_trailer(image_, live);
+    app_.set_trailer(image_, live, bar_top, bar_bottom);
 }
 } // namespace ps5

@@ -41,8 +41,9 @@ pub fn find(id: &str) -> Option<String> {
         .as_array()?;
 
     // Each video's length, whether IMDb calls it a trailer (it also lists clips and
-    // featurettes), and its best MP4: 720p, else 480p, else whatever MP4 there is.
-    let mut found: Vec<(bool, u64, String)> = videos
+    // featurettes), and its best MP4: 1080p, else 720p, else 480p, else whatever MP4
+    // there is; and whether that is a sharp one.
+    let mut found: Vec<(bool, u64, bool, String)> = videos
         .iter()
         .filter_map(|edge| {
             let node = edge.get("node")?;
@@ -61,16 +62,19 @@ pub fn find(id: &str) -> Option<String> {
                         .flatten()
                 })
             };
-            let url = mp4(Some("DEF_720p"))
+            let full = mp4(Some("DEF_1080p"));
+            let sharp = full.is_some();
+            let url = full
+                .or_else(|| mp4(Some("DEF_720p")))
                 .or_else(|| mp4(Some("DEF_480p")))
                 .or_else(|| mp4(None))?;
-            Some((trailer, seconds, url))
+            Some((trailer, seconds, sharp, url))
         })
         .collect();
-    // Trailers before anything else; among them the longest that is not overlong (the
-    // short ones are usually teasers or single scenes).
-    found.sort_by_key(|(trailer, seconds, _)| {
-        (!*trailer, *seconds > LONGEST, std::cmp::Reverse(*seconds))
+    // Trailers before anything else; among them the ones not overlong, then the ones to
+    // be had in 1080p, then the longest (the short ones are usually teasers or scenes).
+    found.sort_by_key(|(trailer, seconds, sharp, _)| {
+        (!*trailer, *seconds > LONGEST, !*sharp, std::cmp::Reverse(*seconds))
     });
-    found.into_iter().next().map(|(_, _, url)| url)
+    found.into_iter().next().map(|(_, _, _, url)| url)
 }
