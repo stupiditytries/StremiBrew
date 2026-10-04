@@ -52,14 +52,51 @@ struct Cache {
     slots: usize,
     /// The address the blocks belong to; another address starts the cache afresh.
     url: String,
-    /// For each block of the video that is held: its slot in the file, and how much of it
-    /// (from its start) has been filled in.
-    blocks: HashMap<u64, (usize, u64)>,
+    /// For each block of the video that is held: its slot in the file and which parts of
+    /// it have been filled in.
+    blocks: HashMap<u64, Block>,
     /// The held blocks, oldest first.
     order: VecDeque<u64>,
 }
 
+/// A held block. Reading runs forward, so a block fills as one stretch, `begin..end`.
+/// That stretch starts at the block's beginning unless reading began part-way through it
+/// (the first block after a seek); if reading later arrives from the block before, the
+/// missing start is filled in as `0..head` until it meets `begin`.
+#[derive(Clone, Copy)]
+struct Block {
+    slot: usize,
+    head: u64,
+    begin: u64,
+    end: u64,
+}
+
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+
+/// What playback's reading has cost, for the app's log: bytes that came from the cache,
+/// bytes that came from the network, connections opened, and the milliseconds those took
+/// to answer.
+static STATS: [std::sync::atomic::AtomicU64; 4] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+fn count(which: usize, amount: u64) {
+    STATS[which].fetch_add(amount, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Copies the four counters (see `STATS`) to `out`.
+#[no_mangle]
+pub extern "C" fn stremio_http_stats(out: *mut u64) {
+    if out.is_null() {
+        return;
+    }
+    for (index, counter) in STATS.iter().enumerate() {
+        unsafe { out.add(index).write(counter.load(std::sync::atomic::Ordering::Relaxed)) };
+    }
+}
 
 impl Cache {
     fn claim(&mut self, url: &str) {
@@ -71,47 +108,77 @@ impl Cache {
     }
 
     fn read(&mut self, position: u64, buffer: &mut [u8]) -> Option<usize> {
-        let (slot, filled) = *self.blocks.get(&(position / BLOCK))?;
+        let block = *self.blocks.get(&(position / BLOCK))?;
         let offset = position % BLOCK;
-        if offset >= filled {
+        let until = if offset >= block.begin && offset < block.end {
+            block.end
+        } else if block.begin > 0 && offset < block.head {
+            block.head
+        } else {
             return None;
-        }
-        let count = buffer.len().min((filled - offset) as usize);
-        self.file.seek(SeekFrom::Start(slot as u64 * BLOCK + offset)).ok()?;
+        };
+        let count = buffer.len().min((until - offset) as usize);
+        self.file
+            .seek(SeekFrom::Start(block.slot as u64 * BLOCK + offset))
+            .ok()?;
         self.file.read_exact(&mut buffer[..count]).ok()?;
         Some(count)
     }
 
+    fn store(&mut self, slot: usize, offset: u64, data: &[u8]) -> bool {
+        self.file
+            .seek(SeekFrom::Start(slot as u64 * BLOCK + offset))
+            .and_then(|_| self.file.write_all(data))
+            .is_ok()
+    }
+
     fn write(&mut self, mut position: u64, mut data: &[u8]) {
         while !data.is_empty() {
-            let block = position / BLOCK;
+            let index = position / BLOCK;
             let offset = position % BLOCK;
             let count = data.len().min((BLOCK - offset) as usize);
-            let held = self.blocks.get(&block).copied();
-            let slot = match held {
-                Some((slot, filled)) if filled == offset => Some(slot),
-                Some(_) => None, // already held, or not the next part of it
-                None if offset == 0 => {
+            match self.blocks.get(&index).copied() {
+                // The next part of the block's stretch.
+                Some(mut block) if offset == block.end => {
+                    if self.store(block.slot, offset, &data[..count]) {
+                        block.end += count as u64;
+                        self.blocks.insert(index, block);
+                    }
+                }
+                // The next part of the block's missing start, up to where the stretch
+                // begins; when the two meet the block is whole from its beginning.
+                Some(mut block) if block.begin > 0 && offset == block.head => {
+                    let fill = count.min((block.begin - block.head) as usize);
+                    if self.store(block.slot, offset, &data[..fill]) {
+                        block.head += fill as u64;
+                        if block.head == block.begin {
+                            block.begin = 0;
+                            block.head = 0;
+                        }
+                        self.blocks.insert(index, block);
+                    }
+                }
+                Some(_) => {} // already held, or not next to what is held
+                None => {
                     // A new block takes a free slot, or the oldest block's.
                     let slot = if self.order.len() < self.slots {
                         self.order.len()
                     } else {
-                        let oldest = self.order.pop_front().unwrap_or(block);
-                        self.blocks.remove(&oldest).map_or(0, |(slot, _)| slot)
+                        let oldest = self.order.pop_front().unwrap_or(index);
+                        self.blocks.remove(&oldest).map_or(0, |block| block.slot)
                     };
-                    self.order.push_back(block);
-                    self.blocks.insert(block, (slot, 0));
-                    Some(slot)
-                }
-                None => None, // reading began part-way through this block
-            };
-            if let Some(slot) = slot {
-                let written = self
-                    .file
-                    .seek(SeekFrom::Start(slot as u64 * BLOCK + offset))
-                    .and_then(|_| self.file.write_all(&data[..count]));
-                if written.is_ok() {
-                    self.blocks.insert(block, (slot, offset + count as u64));
+                    if self.store(slot, offset, &data[..count]) {
+                        self.order.push_back(index);
+                        self.blocks.insert(
+                            index,
+                            Block {
+                                slot,
+                                head: 0,
+                                begin: offset,
+                                end: offset + count as u64,
+                            },
+                        );
+                    }
                 }
             }
             position += count as u64;
@@ -196,6 +263,7 @@ impl HttpStream {
             Some(piece) => format!("bytes={}-{}", self.position, self.position + piece - 1),
             None => format!("bytes={}-", self.position),
         };
+        let asked = std::time::Instant::now();
         let direct = RESOLVED.lock().ok().and_then(|known| known.get(&self.url).cloned());
         let mut answer = HTTP
             .get(direct.as_deref().unwrap_or(&self.url))
@@ -214,6 +282,10 @@ impl HttpStream {
             Err(ureq::Error::Status(416, _)) => return Ok(false),
             Err(error) => return Err(error.to_string()),
         };
+        if self.piece.is_none() {
+            count(2, 1);
+            count(3, asked.elapsed().as_millis() as u64);
+        }
         if response.get_url() != self.url {
             if let Ok(mut known) = RESOLVED.lock() {
                 known.insert(self.url.clone(), response.get_url().to_owned());
@@ -266,9 +338,12 @@ impl HttpStream {
         }
         if let Some(cache) = CACHE.lock().unwrap().as_mut() {
             if cache.url == self.url {
-                if let Some(count) = cache.read(self.position, buffer) {
-                    self.position += count as u64;
-                    return Ok(count);
+                if let Some(read) = cache.read(self.position, buffer) {
+                    if self.piece.is_none() {
+                        count(0, read as u64);
+                    }
+                    self.position += read as u64;
+                    return Ok(read);
                 }
             }
         }
@@ -301,15 +376,21 @@ impl HttpStream {
                 continue;
             }
             match self.body.as_mut().map(|body| body.read(buffer)) {
-                Some(Ok(count)) if count > 0 => {
-                    if let Some(cache) = CACHE.lock().unwrap().as_mut() {
-                        if cache.url == self.url {
-                            cache.write(self.position, &buffer[..count]);
+                Some(Ok(read)) if read > 0 => {
+                    // Only playback's own reading is kept: the scattered pieces the
+                    // scrubbing pictures read would leave blocks that playback's reading
+                    // could then not fill.
+                    if self.piece.is_none() {
+                        count(1, read as u64);
+                        if let Some(cache) = CACHE.lock().unwrap().as_mut() {
+                            if cache.url == self.url {
+                                cache.write(self.position, &buffer[..read]);
+                            }
                         }
                     }
-                    self.position += count as u64;
+                    self.position += read as u64;
                     self.body_position = self.position;
-                    return Ok(count);
+                    return Ok(read);
                 }
                 // An early end is a dropped connection when more of the file is known to
                 // follow; otherwise it is the end of the file.

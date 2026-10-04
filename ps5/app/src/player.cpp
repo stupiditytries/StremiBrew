@@ -35,6 +35,7 @@ std::int64_t stremio_http_read(HttpStream *stream, std::uint8_t *buffer, std::si
 void stremio_http_seek(HttpStream *stream, std::uint64_t position);
 std::int64_t stremio_http_size(const HttpStream *stream);
 void stremio_http_close(HttpStream *stream);
+void stremio_http_stats(std::uint64_t *out);
 
 int sceAudioOutInit(void);
 int sceAudioOutOpen(int user, int type, int index, std::uint32_t length, std::uint32_t frequency,
@@ -549,6 +550,11 @@ struct Player::Session
     bool audio_swapping = false, audio_parked = false;
     std::vector<Cue> cues; // the subtitles on hand, in order of their start
     double subtitle_delay = 0;
+    // A seek being timed for the log: when it was asked for, when the reader took it up,
+    // when the demuxer had moved, and the stream's counters at that point.
+    bool seek_traced = false;
+    double seek_asked = 0, seek_taken = 0, seek_moved = 0, seek_target = 0;
+    std::uint64_t seek_stats[4] = {};
     // A copy being taken of the sound as it plays (see Player::capture_audio).
     bool capturing = false, capture_failed = false, capture_complete = false;
     std::size_t capture_wanted = 0;
@@ -854,8 +860,12 @@ struct Player::Session
             }
             if (seeking)
             {
+                const double taken = now_seconds();
+                std::uint64_t before[4] = {};
+                stremio_http_stats(before);
                 const auto stamp = static_cast<std::int64_t>((target + origin) * AV_TIME_BASE);
                 const int result = avformat_seek_file(format, -1, INT64_MIN, stamp, stamp, 0);
+                const double moved = now_seconds();
                 if (subtitle != nullptr)
                     avcodec_flush_buffers(subtitle);
                 std::lock_guard lock{mutex};
@@ -882,6 +892,11 @@ struct Player::Session
                 starved = false;
                 clock_pts = target;
                 clock_running = false;
+                seek_traced = true;
+                seek_taken = taken;
+                seek_moved = moved;
+                seek_target = target;
+                std::memcpy(seek_stats, before, sizeof before);
                 wake.notify_all();
                 continue;
             }
@@ -958,6 +973,22 @@ struct Player::Session
                 mine = packet_serial;
                 drained = false;
             }
+            if (packet != nullptr)
+            {
+                // After a seek the decoder has to work from the key frame before the
+                // target up to it. The pictures on the way are not shown, so the ones no
+                // other picture is built from are not decoded at all, which roughly
+                // halves the wait in most videos.
+                double from;
+                {
+                    std::lock_guard lock{mutex};
+                    from = start_from;
+                }
+                const std::int64_t stamp = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+                const bool early = stamp != AV_NOPTS_VALUE &&
+                                   static_cast<double>(stamp) * video_base - origin < from - 0.25;
+                video->skip_frame = early ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+            }
             // A null packet tells the decoder the file has ended, so it hands over the
             // pictures it was still holding.
             int result = avcodec_send_packet(video, packet);
@@ -998,6 +1029,24 @@ struct Player::Session
                         pictures.push_back({av_frame_clone(frame), pts, mine});
                         video_primed = true;
                         wake.notify_all();
+                        if (seek_traced)
+                        {
+                            // The seek's first picture: where its time went.
+                            seek_traced = false;
+                            std::uint64_t now_stats[4] = {};
+                            stremio_http_stats(now_stats);
+                            const double done = now_seconds();
+                            const std::uint64_t connections = now_stats[2] - seek_stats[2];
+                            note("seek to %.0f s: %.0f ms before the reader took it, %.0f ms moving in the file, "
+                                 "%.0f ms to the first picture; %.1f MB from the cache, %.1f MB from the network, "
+                                 "%llu connections (%llu ms answering)",
+                                 seek_target, (seek_taken - seek_asked) * 1e3, (seek_moved - seek_taken) * 1e3,
+                                 (done - seek_moved) * 1e3,
+                                 static_cast<double>(now_stats[0] - seek_stats[0]) / (1 << 20),
+                                 static_cast<double>(now_stats[1] - seek_stats[1]) / (1 << 20),
+                                 static_cast<unsigned long long>(connections),
+                                 static_cast<unsigned long long>(now_stats[3] - seek_stats[3]));
+                        }
                     }
                 }
                 lock.unlock();
@@ -1400,6 +1449,7 @@ void Player::seek(double seconds)
     std::lock_guard lock{session_->mutex};
     session_->seek_to = std::max(0.0, seconds);
     session_->seek_wanted = true;
+    session_->seek_asked = now_seconds();
     session_->wake.notify_all();
 }
 
