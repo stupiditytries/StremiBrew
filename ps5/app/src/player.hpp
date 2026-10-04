@@ -103,13 +103,15 @@ class Player
     bool preview(double seconds, std::vector<std::uint8_t> &pixels, int &width, int &height,
                  int &index, double &time);
 
-    // The picture's shape (width over height), and how much of its height is black bars
-    // at its top and at its bottom (0 to 1 each), as the last few seconds show it.
+    // The picture's shape (width over height).
     float picture_aspect() const
     {
         return picture_aspect_;
     }
-    void picture_bars(float &top, float &bottom) const;
+    // For a trailer (Options::preview): whether it has been decided if the video carries
+    // black bars, and how much of its height they are at the top and bottom (0 to 1 each).
+    // The decision is made once, from pictures across the video, soon after it opens.
+    bool bars_decided(float &top, float &bottom) const;
 
     // On the drawing thread, with the framebuffer to draw into bound: takes the picture
     // that is due and draws it, fitted to `width` x `height` pixels.
@@ -130,10 +132,6 @@ class Player
     int area_[3][4] = {};
     std::vector<std::uint16_t> packed_;
     bool sheet_sized_ = false;
-    BarFinder bars_; // the black bars the pictures carry
-    bool assume_bars_ = false;
-    int depth_ = 8;
-    bool limited_ = true;
 
     bool has_picture_ = false;
     int shown_serial_ = -1;

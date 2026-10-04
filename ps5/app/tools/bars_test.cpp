@@ -1,9 +1,9 @@
-// Runs the player's black-bar finder over a real video on the PC and prints what it
-// reports as the video goes, the way the player would use it.
+// Runs the player's black-bar decision on the PC: reads pictures taken from across a real
+// video and prints what each shows and what is decided, as the player would decide it.
 //
-//   ffmpeg -v error -i <video> -f rawvideo -pix_fmt gray - | bars_test <width> <height> <fps>
+//   bars_test <width> <height> < pictures
 //
-// The pictures arrive as 8-bit luma, full range (ffmpeg's "gray"), one after another.
+// The pictures arrive one after another as 8-bit luma, full range (ffmpeg's "gray").
 
 #include <cstdio>
 #include <cstdlib>
@@ -18,36 +18,29 @@
 
 int main(int argc, char **argv)
 {
-    if (argc < 4)
+    if (argc < 3)
         return 2;
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY);
 #endif
     const int width = std::atoi(argv[1]), height = std::atoi(argv[2]);
-    const double rate = std::atof(argv[3]);
     std::vector<unsigned char> picture(static_cast<std::size_t>(width) * height);
-    ps5::BarFinder finder;
-    // As the player does: bars are assumed for a file of ordinary shape.
-    finder.reset(static_cast<double>(width) / height < 1.9 ? 0.128f : 0.0f);
-    float shown_top = -1, shown_bottom = -1;
-    long count = 0, with_bars = 0;
+    std::vector<ps5::BarSample> samples;
     while (std::fread(picture.data(), 1, picture.size(), stdin) == picture.size())
     {
-        // The player looks at every second picture it shows.
-        if ((count & 1) == 0)
-            finder.look(picture.data(), width, width, height, 1, 8, false);
-        float top, bottom;
-        finder.bars(top, bottom);
-        if (top != shown_top || bottom != shown_bottom)
-        {
-            std::printf("  %6.1f s: bars %.1f%% top, %.1f%% bottom\n", count / rate, top * 100, bottom * 100);
-            shown_top = top;
-            shown_bottom = bottom;
-        }
-        with_bars += top > 0;
-        ++count;
+        const ps5::BarSample sample = ps5::measure_bars(picture.data(), width, width, height, 1, 8, false);
+        if (sample.dark)
+            std::printf("  picture %zu: dark\n", samples.size() + 1);
+        else
+            std::printf("  picture %zu: %.1f%% top, %.1f%% bottom\n", samples.size() + 1, sample.top * 100,
+                        sample.bottom * 100);
+        samples.push_back(sample);
     }
-    std::printf("  %ld pictures (%.0f s), bars reported for %.0f%% of them\n", count, count / rate,
-                count > 0 ? 100.0 * with_bars / count : 0.0);
+    float top = 0, bottom = 0;
+    ps5::decide_bars(samples.data(), static_cast<int>(samples.size()), top, bottom);
+    if (top > 0)
+        std::printf("  decided: bars, %.1f%% top and %.1f%% bottom\n", top * 100, bottom * 100);
+    else
+        std::printf("  decided: no bars\n");
     return 0;
 }

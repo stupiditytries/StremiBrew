@@ -338,11 +338,8 @@ int main(int argc, char **argv)
                 for (std::size_t index = 0; index < luma.size(); ++index)
                     luma[index] = static_cast<unsigned char>(
                         (pixels[index * 4] * 54 + pixels[index * 4 + 1] * 183 + pixels[index * 4 + 2] * 19) >> 8);
-                ps5::BarFinder finder;
-                finder.reset(0.128f);
-                for (int look = 0; look < 40; ++look)
-                    finder.look(luma.data(), width, width, height, 1, 8, false);
-                finder.bars(trailer_top, trailer_bottom);
+                const ps5::BarSample sample = ps5::measure_bars(luma.data(), width, width, height, 1, 8, false);
+                ps5::decide_bars(&sample, 1, trailer_top, trailer_bottom);
                 std::printf("trailer picture %dx%d: bars %.1f%% top, %.1f%% bottom\n", width, height,
                             trailer_top * 100, trailer_bottom * 100);
                 // Rows bottom-up, as a texture that has been drawn into.

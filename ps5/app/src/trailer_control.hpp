@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -38,8 +39,9 @@ class TrailerControl
     bool wanted_ = false;   // a title has the focus and its trailer is being got ready
     bool started_ = false;  // the UI has asked for it to play
     bool opened_ = false;   // the player has been given the trailer
+    bool playing_ = false;  // ... and told to play it
+    std::chrono::steady_clock::time_point opened_at_{};
     unsigned framebuffer_ = 0, texture_ = 0;
     int image_ = 0;
-    unsigned long frames_ = 0;
 };
 } // namespace ps5

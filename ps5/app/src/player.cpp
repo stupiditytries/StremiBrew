@@ -72,6 +72,9 @@ constexpr int kThumbWorkers = 12;
 // The workers read the file a piece at a time (see the bridge's stream_io.rs).
 constexpr std::uint64_t kThumbPiece = 384 * 1024;
 constexpr int kThumbIoBuffer = 128 * 1024;
+// Where in a trailer the pictures are taken that decide whether it has black bars (as
+// shares of its length): clear of the cards it opens and closes on.
+constexpr double kProbePlaces[] = {0.12, 0.25, 0.38, 0.50, 0.62, 0.75};
 
 double now_seconds()
 {
@@ -580,6 +583,9 @@ struct Player::Session
     double origin = 0;                                        // the file's first timestamp, in seconds
     std::thread reader, video_thread, audio_thread;
     std::vector<std::thread> preview_threads;
+    // A trailer's black bars, decided before it is shown (see run_probe).
+    bool bars_decided = false;
+    float bars_top = 0, bars_bottom = 0;
     std::vector<int> thumb_order;     // which picture to make first, second, ...
     std::atomic<int> thumb_next{0};   // the place in that order reached so far
     std::atomic<int> thumbs_made{0};
@@ -819,7 +825,9 @@ struct Player::Session
         {
             video_thread = std::thread{[this] { run_video(); }};
             audio_thread = std::thread{[this] { run_audio(); }};
-            if (!preview)
+            if (preview)
+                preview_threads.emplace_back([this] { run_probe(); });
+            else
                 start_previews();
         }
         AVFormatContext *format = input.format;
@@ -1313,6 +1321,82 @@ struct Player::Session
             preview_threads.emplace_back([this] { run_preview(); });
     }
 
+    // A trailer's black bars. The file is opened a second time and one key frame is
+    // decoded at each of a few places across it; whether most of those pictures have bars
+    // decides it, once, before the trailer is shown, so the picture never changes size
+    // while it plays. (See black_bars.hpp.)
+    void run_probe()
+    {
+        const auto decided = [&](float top, float bottom) {
+            std::lock_guard lock{mutex};
+            bars_top = top;
+            bars_bottom = bottom;
+            bars_decided = true;
+        };
+        double length;
+        {
+            std::lock_guard lock{mutex};
+            length = duration;
+        }
+        Input second;
+        std::string why;
+        if (length <= 0 || !second.open(url, stop, why, true))
+            return decided(0, 0);
+        const int index = av_find_best_stream(second.format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        AVCodecContext *decoder = index >= 0 ? second.decoder(index, 1) : nullptr;
+        if (decoder == nullptr)
+            return decided(0, 0);
+        decoder->skip_frame = AVDISCARD_NONKEY;
+        AVPacket *packet = av_packet_alloc();
+        AVFrame *frame = av_frame_alloc();
+        const double started = now_seconds();
+        BarSample samples[std::size(kProbePlaces)];
+        int count = 0;
+        for (const double place : kProbePlaces)
+        {
+            if (stop)
+                break;
+            const auto stamp = static_cast<std::int64_t>((length * place + origin) * AV_TIME_BASE);
+            if (avformat_seek_file(second.format, -1, INT64_MIN, stamp, stamp, 0) < 0)
+                continue;
+            avcodec_flush_buffers(decoder);
+            bool done = false;
+            for (int tries = 0; tries < 400 && !done && !stop; ++tries)
+            {
+                if (av_read_frame(second.format, packet) < 0)
+                    break;
+                const bool key = packet->stream_index == index && (packet->flags & AV_PKT_FLAG_KEY);
+                if (key && avcodec_send_packet(decoder, packet) >= 0)
+                {
+                    avcodec_send_packet(decoder, nullptr);
+                    if (avcodec_receive_frame(decoder, frame) >= 0)
+                    {
+                        const AVPixFmtDescriptor *layout = planar_layout(frame);
+                        if (layout != nullptr)
+                        {
+                            const int depth = layout->comp[0].depth;
+                            samples[count++] = measure_bars(frame->data[0], frame->linesize[0], frame->width,
+                                                            frame->height, depth > 8 ? 2 : 1, depth,
+                                                            frame->color_range != AVCOL_RANGE_JPEG);
+                        }
+                        av_frame_unref(frame);
+                    }
+                    avcodec_flush_buffers(decoder);
+                    done = true;
+                }
+                av_packet_unref(packet);
+            }
+        }
+        float top = 0, bottom = 0;
+        decide_bars(samples, count, top, bottom);
+        note("trailer bars: %.1f%% top, %.1f%% bottom, from %d pictures in %.1f s", top * 100, bottom * 100,
+             count, now_seconds() - started);
+        decided(top, bottom);
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        avcodec_free_context(&decoder);
+    }
+
     // One worker: the file opened again, read on its own, with a decoder that only does
     // key frames. For each picture it takes from the order it jumps to that stretch of the
     // video and makes a small copy of the key frame there.
@@ -1408,7 +1492,6 @@ void Player::open(const std::string &url, double start, const std::string &audio
     session_->url = url;
     session_->audio_language = audio_language;
     session_->preview = options.preview;
-    assume_bars_ = options.preview;
     format_ = -1; // the next picture is described afresh, for this video
     session_->volume = options.volume;
     session_->paused = options.paused;
@@ -1839,15 +1922,8 @@ bool Player::describe(const void *picture)
     sheet_height_ = frame->height + chroma_height;
     packed_.assign(static_cast<std::size_t>(sheet_width_) * static_cast<std::size_t>(sheet_height_), 0);
     sheet_sized_ = false;
-    // A trailer in a file of ordinary shape is taken to have a wide film's bars until
-    // its pictures show otherwise; a file that is itself wide has none to assume.
-    bars_.reset(assume_bars_ && static_cast<float>(frame->width) / static_cast<float>(frame->height) < 1.9f
-                    ? 0.128f
-                    : 0.0f);
-    depth_ = depth;
 
     const Colours colours = colours_of(frame, depth, bytes_);
-    limited_ = !colours.full;
     glUseProgram(program_);
     glUniform2f(glGetUniformLocation(program_, "sheet_size"), static_cast<float>(sheet_width_),
                 static_cast<float>(sheet_height_));
@@ -1880,17 +1956,20 @@ bool Player::describe(const void *picture)
 // three; and an 8-bit texture costs it some 40 ms, which no video's frame rate survives,
 // so 8-bit video is widened. (A sample v becomes v * 257, the same fraction of the 16-bit
 // range as v is of the 8-bit one, so the colour arithmetic does not change.)
-void Player::picture_bars(float &top, float &bottom) const
+bool Player::bars_decided(float &top, float &bottom) const
 {
-    bars_.bars(top, bottom);
+    top = bottom = 0;
+    if (session_ == nullptr)
+        return false;
+    std::lock_guard lock{session_->mutex};
+    top = session_->bars_top;
+    bottom = session_->bars_bottom;
+    return session_->bars_decided;
 }
 
 void Player::upload(const void *picture)
 {
     const auto *frame = static_cast<const AVFrame *>(picture);
-    // Every second picture is looked at for black bars (see black_bars.hpp).
-    if ((shown_ & 1) == 0)
-        bars_.look(frame->data[0], frame->linesize[0], frame->width, frame->height, bytes_, depth_, limited_);
     for (int plane = 0; plane < 3; ++plane)
     {
         const int width = area_[plane][2], height = area_[plane][3];

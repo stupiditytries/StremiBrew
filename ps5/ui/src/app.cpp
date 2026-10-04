@@ -590,7 +590,6 @@ void App::update(float seconds)
             trailer_for_ = wanted;
             trailer_dwell_ = 0;
             trailer_prepared_ = trailer_started_ = false;
-            trailer_trim_top_ = trailer_trim_bottom_ = 0;
         }
         else if (!wanted.empty())
         {
@@ -613,11 +612,12 @@ void App::update(float seconds)
                              hero_.id == trailer_for_;
         trailer_alpha_ = showing ? std::min(1.0f, trailer_alpha_ + seconds / 0.7f)
                                  : std::max(0.0f, trailer_alpha_ - seconds / 0.25f);
-        // Black bars are found a moment into a trailer; the zoom past them eases in.
-        if (trailer_live_)
+        // How far to zoom past black bars is taken from the host while the trailer is not
+        // yet visible, and held from then on: the picture never changes size on screen.
+        if (trailer_alpha_ <= 0.0f)
         {
-            trailer_trim_top_ = eased(trailer_trim_top_, trailer_bar_top_, seconds * 0.3f);
-            trailer_trim_bottom_ = eased(trailer_trim_bottom_, trailer_bar_bottom_, seconds * 0.3f);
+            trailer_trim_top_ = trailer_bar_top_;
+            trailer_trim_bottom_ = trailer_bar_bottom_;
         }
     }
 

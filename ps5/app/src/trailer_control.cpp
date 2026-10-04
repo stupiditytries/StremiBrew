@@ -1,6 +1,7 @@
 #include "trailer_control.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -47,6 +48,7 @@ ui::TrailerHandler TrailerControl::handler()
         player_.close();
         opened_ = false;
         started_ = false;
+        playing_ = false;
         wanted_ = true;
         const int ticket = ++ticket_;
         std::thread{[shared = shared_, id, ticket] {
@@ -61,14 +63,10 @@ ui::TrailerHandler TrailerControl::handler()
             }
         }}.detach();
     };
-    handler.start = [this] {
-        started_ = true;
-        if (opened_)
-            player_.set_paused(false);
-    };
+    handler.start = [this] { started_ = true; };
     handler.stop = [this] {
         player_.close();
-        wanted_ = started_ = opened_ = false;
+        wanted_ = started_ = opened_ = playing_ = false;
     };
     return handler;
 }
@@ -125,9 +123,10 @@ void TrailerControl::frame()
                 Player::Options options;
                 options.preview = true;
                 options.volume = kVolume;
-                options.paused = !started_;
+                options.paused = true;
                 player_.open(url, 0.0, {}, options);
                 opened_ = true;
+                opened_at_ = std::chrono::steady_clock::now();
             }
         }
     }
@@ -150,23 +149,29 @@ void TrailerControl::frame()
         player_.draw(kWidth, kHeight);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         const ui::Playback status = player_.status();
-        live = started_ && status.state == ui::Playback::State::Playing;
+        // Whether the video carries black bars is settled before it plays, so that it is
+        // shown at one size from its first moment. (Should that take unusually long, it
+        // plays without waiting further, as it is.)
+        float own_top = 0, own_bottom = 0;
+        const bool decided = player_.bars_decided(own_top, own_bottom) ||
+                             std::chrono::steady_clock::now() - opened_at_ > std::chrono::seconds(4);
+        if (started_ && decided && !playing_)
+        {
+            playing_ = true;
+            player_.set_paused(false);
+        }
+        live = playing_ && status.state == ui::Playback::State::Playing;
         // The black bars in the texture: the ones a picture wider than the texture
         // leaves above and below it, and any the picture itself carries.
         const float shape = player_.picture_aspect();
         const float filled = std::min(1.0f, (static_cast<float>(kWidth) / kHeight) / std::max(shape, 0.1f));
-        float own_top = 0, own_bottom = 0;
-        player_.picture_bars(own_top, own_bottom);
         bar_top = (1.0f - filled) / 2 + own_top * filled;
         bar_bottom = (1.0f - filled) / 2 + own_bottom * filled;
-        if (live && ++frames_ % 120 == 1)
-            log_line("trailer: shape %.2f, its own bars %.1f%% and %.1f%%, bars in the texture %.1f%% and %.1f%%",
-                     shape, own_top * 100, own_bottom * 100, bar_top * 100, bar_bottom * 100);
         if (status.state == ui::Playback::State::Ended || status.state == ui::Playback::State::Failed)
         {
             // Over (or it would not play): back to the artwork.
             player_.close();
-            opened_ = wanted_ = false;
+            opened_ = wanted_ = playing_ = false;
         }
     }
     app_.set_trailer(image_, live, bar_top, bar_bottom);
