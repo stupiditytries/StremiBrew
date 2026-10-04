@@ -11,6 +11,7 @@ mod model;
 mod playback;
 mod stream_io;
 mod subtitles;
+pub mod trailer;
 
 use std::collections::VecDeque;
 use std::ffi::{c_char, CStr};
@@ -693,6 +694,17 @@ pub extern "C" fn stremio_core_resume_offset(title: *const c_char, video: *const
     runtime
         .model()
         .map_or(0, |model| playback::resume_offset(&model, title, video))
+}
+
+/// Finds a title's trailer (see `trailer.rs`) and writes its address to `out`. This asks
+/// a web service, so it is called from a thread that may wait. Returns the address's
+/// length, or 0 when the title has no trailer that can be played.
+#[no_mangle]
+pub extern "C" fn stremio_trailer(id: *const c_char, out: *mut c_char, capacity: usize) -> usize {
+    match c_str(id).and_then(trailer::find) {
+        Some(address) if address.len() < capacity => copy_out(&address, out, capacity),
+        _ => 0,
+    }
 }
 
 /// Asks the account's add-ons for a video's subtitles and writes what they offer as a

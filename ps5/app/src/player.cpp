@@ -511,6 +511,8 @@ struct Player::Session
 {
     std::string url;
     std::string audio_language;
+    bool preview = false; // a trailer (see Player::Options)
+    float volume = 1.0f;
     std::atomic<bool> stop{false};
 
     // Everything from here to the FFmpeg objects is guarded by `mutex`; `wake` is
@@ -631,7 +633,7 @@ struct Player::Session
             return false;
         }
         const AVCodecParameters *parameters = format->streams[video_index]->codecpar;
-        video = input.decoder(video_index, kDecodeThreads);
+        video = input.decoder(video_index, preview ? 4 : kDecodeThreads);
         if (video == nullptr)
         {
             fail(std::string{"Video in the "} + avcodec_get_name(parameters->codec_id) +
@@ -817,7 +819,8 @@ struct Player::Session
         {
             video_thread = std::thread{[this] { run_video(); }};
             audio_thread = std::thread{[this] { run_audio(); }};
-            start_previews();
+            if (!preview)
+                start_previews();
         }
         AVFormatContext *format = input.format;
         AVPacket *packet = av_packet_alloc();
@@ -1256,6 +1259,9 @@ struct Player::Session
         pcm.resize(before + static_cast<std::size_t>(std::max(made, 0)) * 2);
         if (made <= 0)
             return;
+        if (volume < 0.999f)
+            for (std::size_t index = before; index < pcm.size(); ++index)
+                pcm[index] = static_cast<std::int16_t>(static_cast<float>(pcm[index]) * volume);
         double from;
         {
             std::lock_guard lock{mutex};
@@ -1393,13 +1399,17 @@ Player::~Player()
     close();
 }
 
-void Player::open(const std::string &url, double start, const std::string &audio_language)
+void Player::open(const std::string &url, double start, const std::string &audio_language,
+                  const Options &options)
 {
     close();
     av_log_set_level(AV_LOG_ERROR);
     session_ = std::make_shared<Session>();
     session_->url = url;
     session_->audio_language = audio_language;
+    session_->preview = options.preview;
+    session_->volume = options.volume;
+    session_->paused = options.paused;
     if (start > 1.0)
     {
         session_->seek_wanted = true;

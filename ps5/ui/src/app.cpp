@@ -225,6 +225,17 @@ void App::set_languages_handler(
     languages_ = std::move(handler);
 }
 
+void App::set_trailer_handler(TrailerHandler handler)
+{
+    trailer_handler_ = std::move(handler);
+}
+
+void App::set_trailer(int image, bool live)
+{
+    trailer_image_ = image;
+    trailer_live_ = live;
+}
+
 void App::set_speech_models(const SpeechModels &models)
 {
     speech_ = models;
@@ -316,6 +327,7 @@ std::size_t App::focus_mark() const
     add(title_open_ ? details_->focus_mark() : 0);
     add(static_cast<std::size_t>(content_focus_));
     add(static_cast<std::size_t>(speech_.chosen));
+    add(trailers_);
     add(std::hash<std::string>{}(account_.audio_language + '/' + account_.subtitles_language));
     add(static_cast<std::size_t>(subtitle_style_.size * 7 + subtitle_style_.background * 131 +
                                  subtitle_style_.colour * 1009 + (subtitle_style_.bold ? 5003 : 0) +
@@ -366,9 +378,16 @@ void App::apply(Button button)
     case Zone::Content:
         if (button == Button::Up && content_focus_ > 0)
             --content_focus_;
-        else if (button == Button::Down && content_focus_ < 9)
+        else if (button == Button::Down && content_focus_ < 10)
             ++content_focus_;
         else if (content_focus_ == 3 && (button == Button::Left || button == Button::Right ||
+                                         button == Button::Accept))
+        {
+            trailers_ = !trailers_;
+            if (subtitle_style_handler_)
+                subtitle_style_handler_(subtitle_style_); // the host saves all of these together
+        }
+        else if (content_focus_ == 8 && (button == Button::Left || button == Button::Right ||
                                          button == Button::Accept))
         {
             speech_.chosen = ((speech_.chosen + (button == Button::Left ? -1 : 1)) % kSpeechModelCount +
@@ -378,15 +397,16 @@ void App::apply(Button button)
             if (choose_speech_)
                 choose_speech_(speech_.chosen);
         }
-        else if (content_focus_ == 4 && button == Button::Accept)
+        else if (content_focus_ == 9 && button == Button::Accept)
         {
             if (!speech_.ready[speech_.chosen] && speech_.downloading < 0 && download_speech_)
                 download_speech_(speech_.chosen);
         }
-        else if (content_focus_ >= 5 && (button == Button::Left || button == Button::Right ||
-                                         button == Button::Accept))
-            // Row 5 is the calibration offset (7 to that function); 6 to 9 are its 3 to 6.
-            change_subtitle_style(content_focus_ == 5 ? 7 : content_focus_ - 3,
+        else if (content_focus_ >= 4 && content_focus_ != 9 &&
+                 (button == Button::Left || button == Button::Right || button == Button::Accept))
+            // Rows 4 to 7 are the style rows (3 to 6 to that function); row 10 is the
+            // calibration offset (its 7).
+            change_subtitle_style(content_focus_ == 10 ? 7 : content_focus_ - 1,
                                   button == Button::Left ? -1 : 1);
         else if (content_focus_ > 0 && (button == Button::Left || button == Button::Right ||
                                         button == Button::Accept))
@@ -550,6 +570,46 @@ void App::update(float seconds)
     else if (!stale && hero_valid_)
     {
         hero_alpha_ = std::min(1.0f, hero_alpha_ + seconds / kHeroFadeIn);
+    }
+
+    // The trailer of the title the focus rests on. Shortly after the focus arrives the
+    // host is asked to get it ready (finding it and opening it take a second or two, which
+    // the rest of the dwell covers); after the dwell it plays; when the focus moves on, or
+    // anything else takes the screen, it stops.
+    {
+        constexpr float kPrepareAfter = 0.6f, kPlayAfter = 3.0f;
+        const bool browsing = trailers_ && !title_open_ && !veil_rising_ && !player_open_ &&
+                              zone_ == Zone::Rows && kTabs[selected_tab_].icon == Icon::Board;
+        const std::string wanted = browsing && item != nullptr ? item->id : std::string{};
+        if (wanted != trailer_for_)
+        {
+            if (trailer_prepared_ && trailer_handler_.stop)
+                trailer_handler_.stop();
+            trailer_for_ = wanted;
+            trailer_dwell_ = 0;
+            trailer_prepared_ = trailer_started_ = false;
+        }
+        else if (!wanted.empty())
+        {
+            trailer_dwell_ += seconds;
+            if (!trailer_prepared_ && trailer_dwell_ >= kPrepareAfter)
+            {
+                trailer_prepared_ = true;
+                if (trailer_handler_.prepare)
+                    trailer_handler_.prepare(wanted);
+            }
+            if (trailer_prepared_ && !trailer_started_ && trailer_dwell_ >= kPlayAfter)
+            {
+                trailer_started_ = true;
+                if (trailer_handler_.start)
+                    trailer_handler_.start();
+            }
+        }
+        // It fades in over the artwork once it is playing, and out faster.
+        const bool showing = trailer_live_ && trailer_started_ && trailer_image_ != 0 && hero_valid_ &&
+                             hero_.id == trailer_for_;
+        trailer_alpha_ = showing ? std::min(1.0f, trailer_alpha_ + seconds / 0.7f)
+                                 : std::max(0.0f, trailer_alpha_ - seconds / 0.25f);
     }
 
     // Artwork the featured area is likely to need next is downloaded ahead of time: the
@@ -772,13 +832,33 @@ void App::draw_hero()
     const float image_width = image_height * 16.0f / 9.0f;
     const float image_left = kScreenWidth - image_width;
     const Images::Texture background = images_->get(item->background, kArtPixels);
-    if (background.state == Images::State::Ready)
+    const bool art = background.state == Images::State::Ready;
+    const bool trailer = trailer_alpha_ > 0.01f && trailer_image_ != 0;
+    if (art)
     {
         if (current)
             hero_art_alpha_ = std::min(1.0f, hero_art_alpha_ + rise);
         nvgGlobalAlpha(vg_, hero_art_alpha_);
         cover_image(vg_, image_left, 0, image_width, image_height, 0, background);
         nvgGlobalAlpha(vg_, 1.0f);
+    }
+    if (trailer)
+    {
+        // The trailer takes the artwork's place, scaled to cover the same area.
+        int picture_width = 0, picture_height = 0;
+        nvgImageSize(vg_, trailer_image_, &picture_width, &picture_height);
+        const float scale = std::max(image_width / static_cast<float>(std::max(1, picture_width)),
+                                     image_height / static_cast<float>(std::max(1, picture_height)));
+        const float shown_width = picture_width * scale, shown_height = picture_height * scale;
+        nvgBeginPath(vg_);
+        nvgRect(vg_, image_left, 0, image_width, image_height);
+        nvgFillPaint(vg_, nvgImagePattern(vg_, image_left + (image_width - shown_width) / 2,
+                                          (image_height - shown_height) / 2, shown_width, shown_height,
+                                          0, trailer_image_, trailer_alpha_ * fade));
+        nvgFill(vg_);
+    }
+    if (art || trailer)
+    {
         const auto shade = [&](float x0, float y0, float x1, float y1, float from, float to) {
             nvgBeginPath(vg_);
             nvgRect(vg_, image_left - 1, 0, image_width + 2, image_height + 1);
@@ -1063,10 +1143,40 @@ void App::draw_settings()
     choice(2, "Subtitles",
            account_.subtitles_language.empty() ? std::string{"Off"}
                                                : language_name(account_.subtitles_language));
+    choice(3, "Trailers on the home screen", trailers_ ? "On" : "Off");
+
+    // A second column: how subtitles look, with a sample.
+    left += units(36.0f);
+    top = kTopBarHeight + units(0.5f);
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, kRowTitleSize);
+    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    nvgFillColor(vg_, foreground());
+    nvgText(vg_, left, top, "Subtitle style", nullptr);
+    top += kRowTitleSize * 1.2f + units(1.0f);
+    const SubtitleStyle &style = subtitle_style_;
+    choice(4, "Size", std::to_string(style.size) + "%");
+    choice(5, "Background", style.background == 0 ? std::string{"None"} : std::to_string(style.background) + "%");
+    choice(6, "Colour", kSubtitleColours[style.colour].name);
+    choice(7, "Weight", style.bold ? "Bold" : "Regular");
+    // The sample sits on a patch of mid grey, standing in for a picture.
+    top += units(0.6f);
+    const float sample_width = units(30.0f), sample_height = units(5.6f);
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, left, top, sample_width, sample_height, kRadius);
+    nvgFillPaint(vg_, nvgLinearGradient(vg_, left, top, left + sample_width, top + sample_height,
+                                        nvgRGBf(0.42f, 0.46f, 0.52f), nvgRGBf(0.2f, 0.22f, 0.26f)));
+    nvgFill(vg_);
+    nvgSave(vg_);
+    nvgScissor(vg_, left, top, sample_width, sample_height);
+    draw_subtitle_text(vg_, style, "Subtitles look like this,\nover whatever is playing.",
+                       left + sample_width / 2, top + sample_height - units(0.9f),
+                       sample_width - units(2.0f), 0.6f);
+    nvgRestore(vg_);
 
     // Auto-calibrate: the speech model it listens with, fetching that model, and an
     // offset added to whatever it finds.
-    top += units(2.0f);
+    top += sample_height + units(1.6f);
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, kRowTitleSize);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
@@ -1076,12 +1186,12 @@ void App::draw_settings()
     const SpeechModel &model = kSpeechModels[speech_.chosen];
     value_shift = speech_shift_;
     value_alpha = speech_alpha_;
-    choice(3, "Speech model", std::string{model.name} + "  \xC2\xB7  " + model.size);
+    choice(8, "Speech model", std::string{model.name} + "  \xC2\xB7  " + model.size);
     value_shift = 0;
     value_alpha = 1;
     {
         // The chosen model's state, and the button that fetches it.
-        const bool chosen = zone_ == Zone::Content && content_focus_ == 4;
+        const bool chosen = zone_ == Zone::Content && content_focus_ == 9;
         const bool ready = speech_.ready[speech_.chosen];
         const bool busy = speech_.downloading == speech_.chosen;
         const float row_width = units(30.0f), row_height = units(3.25f);
@@ -1125,37 +1235,8 @@ void App::draw_settings()
     {
         char amount[24];
         std::snprintf(amount, sizeof amount, "%+.2f s", subtitle_style_.calibration_offset / 1000.0);
-        choice(5, "Calibration Offset", amount);
+        choice(10, "Calibration Offset", amount);
     }
-
-    // A second column: how subtitles look, with a sample.
-    left += units(36.0f);
-    top = kTopBarHeight + units(0.5f);
-    nvgFontFace(vg_, "medium");
-    nvgFontSize(vg_, kRowTitleSize);
-    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-    nvgFillColor(vg_, foreground());
-    nvgText(vg_, left, top, "Subtitle style", nullptr);
-    top += kRowTitleSize * 1.2f + units(1.0f);
-    const SubtitleStyle &style = subtitle_style_;
-    choice(6, "Size", std::to_string(style.size) + "%");
-    choice(7, "Background", style.background == 0 ? std::string{"None"} : std::to_string(style.background) + "%");
-    choice(8, "Colour", kSubtitleColours[style.colour].name);
-    choice(9, "Weight", style.bold ? "Bold" : "Regular");
-    // The sample sits on a patch of mid grey, standing in for a picture.
-    top += units(0.6f);
-    const float sample_width = units(30.0f), sample_height = units(8.0f);
-    nvgBeginPath(vg_);
-    nvgRoundedRect(vg_, left, top, sample_width, sample_height, kRadius);
-    nvgFillPaint(vg_, nvgLinearGradient(vg_, left, top, left + sample_width, top + sample_height,
-                                        nvgRGBf(0.42f, 0.46f, 0.52f), nvgRGBf(0.2f, 0.22f, 0.26f)));
-    nvgFill(vg_);
-    nvgSave(vg_);
-    nvgScissor(vg_, left, top, sample_width, sample_height);
-    draw_subtitle_text(vg_, style, "Subtitles look like this,\nover whatever is playing.",
-                       left + sample_width / 2, top + sample_height - units(1.2f),
-                       sample_width - units(2.0f), 0.6f);
-    nvgRestore(vg_);
 }
 
 void App::draw_unbuilt_tab()

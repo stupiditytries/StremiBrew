@@ -43,9 +43,22 @@ class Player
     Player();
     ~Player();
 
+    struct Options
+    {
+        // A trailer on the home screen rather than something being watched: no scrubbing
+        // pictures are made and fewer threads decode it.
+        bool preview = false;
+        float volume = 1.0f; // how loud the sound is played, 0 to 1
+        bool paused = false; // opened and made ready, but held at its start
+    };
     // Starts playing `url` from `start` seconds in, with the audio track in
     // `audio_language` when there is one. Returns at once; status() reports how it goes.
-    void open(const std::string &url, double start, const std::string &audio_language);
+    void open(const std::string &url, double start, const std::string &audio_language,
+              const Options &options);
+    void open(const std::string &url, double start, const std::string &audio_language)
+    {
+        open(url, start, audio_language, Options{});
+    }
     // Stops. The threads are wound down in the background, so this does not wait on a
     // stalled network read.
     void close();

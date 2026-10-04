@@ -52,6 +52,15 @@ enum class Intent
     SignOut,
 };
 
+// Trailers on the home screen. The UI says when a title has had the focus long enough to
+// be worth getting its trailer ready, when to play it, and when the focus has moved on.
+struct TrailerHandler
+{
+    std::function<void(const std::string &id)> prepare;
+    std::function<void()> start;
+    std::function<void()> stop;
+};
+
 // What the host does for a title's page.
 struct TitleHandler
 {
@@ -116,6 +125,19 @@ class App
     void set_subtitle_style_handler(std::function<void(const SubtitleStyle &)> handler);
     // The speech models for auto-calibrate: what the host has, and what Settings asks of
     // it (use this model; download this model).
+    void set_trailer_handler(TrailerHandler handler);
+    // The image the host draws trailers into (0 until it has one), and whether a trailer
+    // is playing in it now.
+    void set_trailer(int image, bool live);
+    // Whether trailers play on the home screen (a Settings switch; the host saves it).
+    bool trailer_previews() const
+    {
+        return trailers_;
+    }
+    void set_trailer_previews(bool on)
+    {
+        trailers_ = on;
+    }
     void set_speech_models(const SpeechModels &models);
     void set_speech_handlers(std::function<void(int model)> choose,
                              std::function<void(int model)> download);
@@ -188,10 +210,20 @@ class App
     std::function<void(Sound)> sound_;
     std::function<void(const std::string &, const std::string &)> languages_;
     // Settings, in the order the focus goes through them: the account button (0), the
-    // two language rows (1, 2), auto-calibrate's model, download and offset (3 to 5), and
-    // the four subtitle style rows (6 to 9).
+    // two language rows (1, 2), trailers (3), the four subtitle style rows (4 to 7), and
+    // auto-calibrate's model, download and offset (8 to 10).
     int content_focus_ = 0;
     SpeechModels speech_;
+    // Trailers: the switch; the title whose trailer is being got ready or played and how
+    // long the focus has rested on it; and how visible the trailer is over the artwork.
+    bool trailers_ = true;
+    TrailerHandler trailer_handler_;
+    std::string trailer_for_;
+    float trailer_dwell_ = 0;
+    bool trailer_prepared_ = false, trailer_started_ = false;
+    int trailer_image_ = 0;
+    bool trailer_live_ = false;
+    float trailer_alpha_ = 0;
     // Changing the speech model slides its name and its download status in from the side
     // the change came from: how far off they still are, and how visible.
     float speech_shift_ = 0, speech_alpha_ = 1;

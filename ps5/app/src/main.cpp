@@ -32,6 +32,7 @@
 #include "details_data.hpp"
 #include "pad.hpp"
 #include "play_control.hpp"
+#include "trailer_control.hpp"
 #include "sounds.hpp"
 #include "theme.hpp"
 
@@ -352,8 +353,11 @@ int main()
         },
     });
     app.set_player_handler(playing.handler());
-    // How subtitles look, the calibration offset and the speech model in use are kept
-    // in a small file of the app's own: six whole numbers.
+    ps5::TrailerControl trailers{app, vg};
+    app.set_trailer_handler(trailers.handler());
+
+    // How subtitles look, the calibration offset, the speech model in use and whether
+    // trailers play are kept in a small file of the app's own: seven whole numbers.
     static constexpr char kSubtitleStyleFile[] = "/download0/stremio/subtitle-style.txt";
     static constexpr char kModelFolder[] = "/download0/stremio/models";
     static ui::SpeechModels speech;
@@ -361,8 +365,9 @@ int main()
         const ui::SubtitleStyle &style = app.subtitle_style();
         if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
         {
-            std::fprintf(file, "%d %d %d %d %d %d\n", style.size, style.background, style.colour,
-                         style.bold ? 1 : 0, style.calibration_offset, speech.chosen);
+            std::fprintf(file, "%d %d %d %d %d %d %d\n", style.size, style.background, style.colour,
+                         style.bold ? 1 : 0, style.calibration_offset, speech.chosen,
+                         app.trailer_previews() ? 1 : 0);
             std::fclose(file);
         }
     };
@@ -371,9 +376,11 @@ int main()
         if (std::FILE *file = std::fopen(kSubtitleStyleFile, "r"))
         {
             ui::SubtitleStyle saved;
-            int bold = 0, model = 0;
-            const int read = std::fscanf(file, "%d %d %d %d %d %d", &saved.size, &saved.background,
-                                         &saved.colour, &bold, &saved.calibration_offset, &model);
+            int bold = 0, model = 0, trailers = 1;
+            const int read = std::fscanf(file, "%d %d %d %d %d %d %d", &saved.size, &saved.background,
+                                         &saved.colour, &bold, &saved.calibration_offset, &model, &trailers);
+            if (read == 7)
+                app.set_trailer_previews(trailers != 0);
             if (read >= 4 && saved.size >= 50 && saved.size <= 200 && saved.background >= 0 &&
                 saved.background <= 100 && saved.colour >= 0 &&
                 saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
@@ -381,7 +388,7 @@ int main()
                 saved.bold = bold != 0;
                 if (read < 5 || saved.calibration_offset < -3000 || saved.calibration_offset > 3000)
                     saved.calibration_offset = 0;
-                if (read == 6 && model >= 0 && model < ui::kSpeechModelCount)
+                if (read >= 6 && model >= 0 && model < ui::kSpeechModelCount)
                     speech.chosen = model;
                 style = saved;
             }
@@ -522,6 +529,7 @@ int main()
         }
         const double applied = seconds_now();
 
+        trailers.frame();
         canvas.begin();
         // A playing video's picture goes under the UI, which then draws only its controls.
         playing.frame(width, height);
