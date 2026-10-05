@@ -368,6 +368,8 @@ struct BoardItem<'a> {
     runtime: Option<std::borrow::Cow<'a, str>>,
     imdb_rating: Option<std::borrow::Cow<'a, str>>,
     genres: Vec<std::borrow::Cow<'a, str>>,
+    /// Whether the title is in the account's library.
+    in_library: bool,
     /// For a title part-way through: how far, in thousandths (a whole number: the
     /// console's C library does not read fractions reliably), and the video it was left in.
     progress: Option<u32>,
@@ -385,10 +387,24 @@ fn sharper_poster(url: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Serialises the board's rows for the UI as JSON (see `BoardRow`), with at most
-/// `items_per_row` items in each. Returns the JSON's length, or 0 on failure.
+/// Whether a title is in the account's library (and not merely remembered for its
+/// watch progress).
+fn in_library(model: &Ps5Model, id: &str) -> bool {
+    model
+        .ctx
+        .library
+        .items
+        .get(id)
+        .is_some_and(|item| !item.removed && !item.temp)
+}
+
+/// Serialises a screen's rows for the UI as JSON (see `BoardRow`), with at most
+/// `items_per_row` items in each. `view` says which screen: 0 the board (the account's
+/// catalogs, under the titles part-way through), 1 what the last search found, 2 the
+/// account's library. Returns the JSON's length, or 0 on failure.
 #[no_mangle]
-pub extern "C" fn stremio_core_board_rows(
+pub extern "C" fn stremio_core_rows(
+    view: u32,
     items_per_row: u32,
     out: *mut c_char,
     capacity: usize,
@@ -430,15 +446,92 @@ pub extern "C" fn stremio_core_board_rows(
                 runtime: brief.runtime.map(Into::into),
                 imdb_rating: brief.imdb_rating.map(Into::into),
                 genres: brief.genres.into_iter().map(Into::into).collect(),
+                in_library: !item.removed && !item.temp,
                 progress: Some((item.progress() * 10.0).clamp(0.0, 1000.0) as u32),
                 video: item.state.video_id.as_deref(),
             }
         })
         .collect();
-    let first_shape = stremio_core::types::resource::PosterShape::default();
     let mut rows: Vec<BoardRow> = Vec::new();
-    if !resume.is_empty() {
-        let _ = &first_shape;
+    // The library: the titles the account has added, newest first, a row for each kind.
+    let mut kept: Vec<&stremio_core::types::library::LibraryItem> = Vec::new();
+    if view == 2 {
+        kept = model
+            .ctx
+            .library
+            .items
+            .values()
+            .filter(|item| !item.removed && !item.temp)
+            .collect();
+        kept.sort_by(|left, right| right.mtime.cmp(&left.mtime));
+        let mut kinds: Vec<&str> = Vec::new();
+        for item in &kept {
+            if !kinds.contains(&item.r#type.as_str()) {
+                kinds.push(&item.r#type);
+            }
+        }
+        // Films and series first, whatever else after.
+        kinds.sort_by_key(|kind| match *kind {
+            "movie" => 0,
+            "series" => 1,
+            _ => 2,
+        });
+        for kind in kinds {
+            let items = kept
+                .iter()
+                .filter(|item| item.r#type == kind)
+                .take(items_per_row as usize)
+                .map(|item| {
+                    let art = |what: &str| {
+                        item.id.starts_with("tt").then(|| {
+                            format!("https://images.metahub.space/{what}/medium/{}/img", item.id).into()
+                        })
+                    };
+                    let brief = brief::get(&item.r#type, &item.id).unwrap_or_default();
+                    BoardItem {
+                        id: &item.id,
+                        r#type: &item.r#type,
+                        name: &item.name,
+                        poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
+                        poster_shape: &item.poster_shape,
+                        release_info: brief.release_info.map(Into::into),
+                        background: art("background"),
+                        logo: art("logo"),
+                        description: brief.description.map(Into::into),
+                        runtime: brief.runtime.map(Into::into),
+                        imdb_rating: brief.imdb_rating.map(Into::into),
+                        genres: brief.genres.into_iter().map(Into::into).collect(),
+                        in_library: true,
+                        progress: None,
+                        video: None,
+                    }
+                })
+                .collect();
+            rows.push(BoardRow {
+                index: 0,
+                id: kind,
+                name: match kind {
+                    "movie" => "Movies",
+                    "series" => "Series",
+                    "channel" => "Channels",
+                    "tv" => "TV",
+                    other => other,
+                },
+                r#type: "",
+                addon: "",
+                state: "ready",
+                error: None,
+                items,
+            });
+        }
+    }
+    let nothing = stremio_core::models::catalogs_with_extra::CatalogsWithExtra::default();
+    let shown = match view {
+        1 => &model.search,
+        2 => &nothing,
+        _ => &model.board,
+    };
+    if view == 0 && !resume.is_empty() {
         rows.push(BoardRow {
             index: 0,
             id: "continue_watching",
@@ -450,8 +543,7 @@ pub extern "C" fn stremio_core_board_rows(
             items: resume,
         });
     }
-    rows.extend(model
-        .board
+    rows.extend(shown
         .catalogs
         .iter()
         .enumerate()
@@ -505,6 +597,7 @@ pub extern "C" fn stremio_core_board_rows(
                                 .map(|link| link.name.as_str().into())
                                 .take(3)
                                 .collect(),
+                            in_library: in_library(&model, &item.id),
                             progress: None,
                             video: None,
                         })
@@ -694,6 +787,121 @@ pub extern "C" fn stremio_core_resume_offset(title: *const c_char, video: *const
     runtime
         .model()
         .map_or(0, |model| playback::resume_offset(&model, title, video))
+}
+
+/// Searches the account's catalogs for `query`; `stremio_core_rows` (view 1) then has
+/// what was found, as it arrives.
+#[no_mangle]
+pub extern "C" fn stremio_core_search(query: *const c_char) {
+    let (Some(runtime), Some(query)) = (RUNTIME.get(), c_str(query)) else {
+        return;
+    };
+    runtime.dispatch(RuntimeAction {
+        field: Some(Ps5ModelField::Search),
+        action: Action::Load(ActionLoad::CatalogsWithExtra(Selected {
+            r#type: None,
+            extra: vec![stremio_core::types::addon::ExtraValue {
+                name: "search".to_owned(),
+                value: query.to_owned(),
+            }],
+        })),
+    });
+    runtime.dispatch(RuntimeAction {
+        field: Some(Ps5ModelField::Search),
+        action: Action::CatalogsWithExtra(ActionCatalogsWithExtra::LoadRange(0..16)),
+    });
+}
+
+/// Adds a title to the account's library, or (when `add` is false) takes it out. The
+/// title is one the board, the search or the open title's page has shown. Returns 0 when
+/// the request was made.
+#[no_mangle]
+pub extern "C" fn stremio_core_library_set(id: *const c_char, add: bool) -> i32 {
+    use stremio_core::runtime::msg::ActionCtx;
+    use stremio_core::types::resource::MetaItemPreview;
+    let (Some(runtime), Some(id)) = (RUNTIME.get(), c_str(id)) else {
+        return -1;
+    };
+    let action = if add {
+        // The library keeps a title's catalogue entry, so that entry has to be found:
+        // in the catalogs on hand, on the open title's page, or (for a title the library
+        // only remembers for its watch progress) made from what the library has.
+        let preview = {
+            let Ok(model) = runtime.model() else {
+                return -1;
+            };
+            model
+                .board
+                .catalogs
+                .iter()
+                .chain(model.search.catalogs.iter())
+                .flat_map(|catalog| catalog.iter())
+                .filter_map(|page| match &page.content {
+                    Some(Loadable::Ready(items)) => Some(items),
+                    _ => None,
+                })
+                .flatten()
+                .find(|item| item.id == id)
+                .cloned()
+                .or_else(|| {
+                    model.meta_details.meta_items.iter().find_map(|meta| match &meta.content {
+                        Some(Loadable::Ready(item)) if item.preview.id == id => Some(item.preview.clone()),
+                        _ => None,
+                    })
+                })
+                .or_else(|| {
+                    model.ctx.library.items.get(id).map(|item| MetaItemPreview {
+                        id: item.id.clone(),
+                        r#type: item.r#type.clone(),
+                        name: item.name.clone(),
+                        poster: item.poster.clone(),
+                        background: None,
+                        logo: None,
+                        description: None,
+                        release_info: None,
+                        runtime: None,
+                        released: None,
+                        poster_shape: item.poster_shape.clone(),
+                        links: vec![],
+                        trailer_streams: vec![],
+                        behavior_hints: item.behavior_hints.clone(),
+                    })
+                })
+        };
+        match preview {
+            Some(preview) => ActionCtx::AddToLibrary(preview),
+            None => return -1,
+        }
+    } else {
+        ActionCtx::RemoveFromLibrary(id.to_owned())
+    };
+    runtime.dispatch(RuntimeAction {
+        field: Some(Ps5ModelField::Ctx),
+        action: Action::Ctx(action),
+    });
+    0
+}
+
+/// Takes a title out of "Continue watching" by forgetting how far through it was.
+#[no_mangle]
+pub extern "C" fn stremio_core_forget_progress(id: *const c_char) {
+    if let (Some(runtime), Some(id)) = (RUNTIME.get(), c_str(id)) {
+        runtime.dispatch(RuntimeAction {
+            field: Some(Ps5ModelField::Ctx),
+            action: Action::Ctx(stremio_core::runtime::msg::ActionCtx::RewindLibraryItem(id.to_owned())),
+        });
+    }
+}
+
+/// Brings the library up to date with the account's (what other devices have added).
+#[no_mangle]
+pub extern "C" fn stremio_core_library_sync() {
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.dispatch(RuntimeAction {
+            field: Some(Ps5ModelField::Ctx),
+            action: Action::Ctx(stremio_core::runtime::msg::ActionCtx::SyncLibraryWithAPI),
+        });
+    }
 }
 
 /// Finds a title's trailer (see `trailer.rs`) and writes its address to `out`. This asks

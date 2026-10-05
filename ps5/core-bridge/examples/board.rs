@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use stremio_core_ps5::{
-    stremio_core_account, stremio_core_account_advance, stremio_core_board_rows,
+    stremio_core_account, stremio_core_account_advance, stremio_core_rows,
     stremio_core_board_summary, stremio_core_details, stremio_core_init,
     stremio_core_load_details, stremio_core_sign_in_start,
     stremio_core_last_error, stremio_core_load_board, stremio_core_poll_event,
@@ -44,7 +44,7 @@ fn main() {
             if let Some(output) = std::env::args().nth(2) {
                 let mut buffer = vec![0u8; 4 << 20];
                 let length =
-                    stremio_core_board_rows(20, buffer.as_mut_ptr().cast(), buffer.len());
+                    stremio_core_rows(0, 20, buffer.as_mut_ptr().cast(), buffer.len());
                 std::fs::write(&output, &buffer[..length.min(buffer.len())]).unwrap();
                 println!("wrote {length} bytes to {output}");
             }

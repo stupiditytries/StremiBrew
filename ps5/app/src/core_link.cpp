@@ -10,8 +10,10 @@ extern "C"
     std::int32_t stremio_core_load_board(std::uint32_t rows);
     void stremio_core_board_load_range(std::uint32_t start, std::uint32_t end);
     std::size_t stremio_core_poll_event(char *out, std::size_t capacity);
-    std::size_t stremio_core_board_rows(std::uint32_t items_per_row, char *out,
-                                        std::size_t capacity);
+    std::size_t stremio_core_rows(std::uint32_t view, std::uint32_t items_per_row, char *out,
+                                  std::size_t capacity);
+    void stremio_core_search(const char *query);
+    void stremio_core_library_sync(void);
     void stremio_core_account_advance(void);
     std::size_t stremio_core_account(char *out, std::size_t capacity);
     std::size_t stremio_core_details(char *out, std::size_t capacity);
@@ -62,12 +64,24 @@ void CoreLink::post(std::function<void()> command)
     wake_.notify_one();
 }
 
-bool CoreLink::take_board(std::vector<ui::BoardRow> &rows)
+void CoreLink::set_view(int view, const std::string &query)
+{
+    const std::lock_guard<std::mutex> lock{mutex_};
+    if (view == view_ && query == query_)
+        return;
+    view_ = view;
+    query_ = query;
+    wake_.notify_one();
+}
+
+bool CoreLink::take_board(std::vector<ui::BoardRow> &rows, int &view, std::string &query)
 {
     const std::lock_guard<std::mutex> lock{mutex_};
     if (!board_)
         return false;
     rows = std::move(*board_);
+    view = board_view_;
+    query = board_query_;
     board_.reset();
     return true;
 }
@@ -102,6 +116,8 @@ void CoreLink::run()
     ui::Account known;
     bool account_known = false;
     bool title_was_open = false;
+    int view = 0;
+    std::string query;
 
     for (;;)
     {
@@ -114,6 +130,20 @@ void CoreLink::run()
             if (stopping_)
                 return;
             commands.swap(commands_);
+            // A change of view: the search is started, or the library brought up to
+            // date with the account, and the rows are read afresh for it.
+            if (view_ != view || query_ != query)
+            {
+                view = view_;
+                query = query_;
+                board_stale = true;
+                board_read = 0;
+                board_.reset();
+                if (view == 1)
+                    commands.push_back([query] { stremio_core_search(query.c_str()); });
+                else if (view == 2)
+                    commands.push_back([] { stremio_core_library_sync(); });
+            }
         }
         const bool commanded = !commands.empty();
         for (auto &command : commands)
@@ -128,6 +158,7 @@ void CoreLink::run()
             const std::string_view event{text.data(), length < text.size() ? length : 0};
             // An event too large to read is taken to have changed everything.
             if (event.empty() || event.find("\"board\"") != std::string_view::npos ||
+                event.find("\"search\"") != std::string_view::npos ||
                 event.find("\"ctx\"") != std::string_view::npos)
                 board_stale = true;
             if (event.empty() || event.find("\"meta_details\"") != std::string_view::npos)
@@ -173,13 +204,17 @@ void CoreLink::run()
         {
             board_read = now;
             board_stale = false;
-            length = stremio_core_board_rows(20, text.data(), text.size());
+            // The library's rows hold everything of a kind; the others a screenful or so.
+            length = stremio_core_rows(static_cast<std::uint32_t>(view), view == 2 ? 100 : 20,
+                                       text.data(), text.size());
             std::vector<ui::BoardRow> rows;
             if (length != 0 && length < text.size() &&
                 ui::parse_board(std::string_view{text.data(), length}, rows))
             {
                 const std::lock_guard<std::mutex> lock{mutex_};
                 board_ = std::move(rows);
+                board_view_ = view;
+                board_query_ = query;
             }
         }
 
@@ -197,7 +232,7 @@ void CoreLink::run()
         }
 
         // More rows as the focus nears the last of those asked for.
-        if (focused_catalog_.load(std::memory_order_relaxed) + kRowsAhead >= rows_requested)
+        if (view == 0 && focused_catalog_.load(std::memory_order_relaxed) + kRowsAhead >= rows_requested)
         {
             stremio_core_board_load_range(rows_requested, rows_requested + kRowBatch);
             rows_requested += kRowBatch;

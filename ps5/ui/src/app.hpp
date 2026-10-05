@@ -34,6 +34,33 @@ enum class Button
     SkipBack,    // L1: in the player, back 15 seconds
     SkipForward, // R1: forward 15 seconds
     Calibrate,   // triangle held: in the player, time the subtitles to the dialogue
+    Options,     // the options button: what can be done with the focused title
+    Voice,       // square: search by saying what to search for
+};
+
+// Which set of rows the screen is showing, and so which the host should supply.
+enum class View
+{
+    Board,   // the account's catalogs
+    Search,  // what a search found
+    Library, // the account's library
+};
+
+// What the options menu can ask the host to do with a title.
+enum class LibraryAction
+{
+    Add,    // put it in the library
+    Remove, // take it out
+    Forget, // take it out of "Continue watching"
+};
+
+// How a voice search is going, for the search bar to say.
+enum class VoicePhase
+{
+    Idle,
+    Listening,
+    Working,
+    Failed,
 };
 
 // Sound effects the host plays as the user gets about.
@@ -86,6 +113,20 @@ class App
     ~App();
 
     void set_board(std::vector<BoardRow> rows);
+    // The rows wanted now, and for a search the words searched for. The host supplies
+    // rows for these through set_board (and no others).
+    View view() const;
+    const std::string &search_query() const
+    {
+        return search_sent_;
+    }
+    // Replaces the words being searched for (a voice search's result).
+    void set_search_query(const std::string &text);
+    void set_library_handler(std::function<void(LibraryAction, const BoardItem &)> handler);
+    // Voice search: what starts one (not set when there is no way to hear), and how the
+    // one in progress is going.
+    void set_voice_handler(std::function<void()> start);
+    void set_voice(VoicePhase phase, const std::string &message);
     // How images that are not in the cache folder yet are downloaded (see Images).
     void set_image_fetcher(
         std::function<void(const std::string &address, const std::string &file)> fetch,
@@ -181,6 +222,11 @@ class App
     void follow_focus();
     void enter_tab();
     void apply(Button button);
+    bool press_keyboard(Button button);
+    bool press_menu(Button button);
+    void clear_search();
+    void draw_keyboard();
+    void draw_menu();
     void close_player();
     void change_language(bool subtitles, int step);
     void change_subtitle_style(int row, int step);
@@ -209,6 +255,27 @@ class App
     std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
+    std::function<void(LibraryAction, const BoardItem &)> library_handler_;
+    std::function<void()> voice_handler_;
+    VoicePhase voice_phase_ = VoicePhase::Idle;
+    std::string voice_message_;
+    float voice_shown_ = 0; // seconds a failure has been on show
+    // Search: the words as typed so far, and as last sent to be searched for (typing is
+    // followed at a short remove, so every letter is not a search of its own).
+    std::string search_text_, search_sent_;
+    float search_wait_ = 0;
+    // The on-screen keyboard under the search bar, and the key the focus is on.
+    bool keyboard_open_ = false;
+    int key_row_ = 1, key_column_ = 0;
+    // The view the rows on screen belong to.
+    View shown_view_ = View::Board;
+    std::string shown_query_;
+    // The options menu for a title: the title, what can be done with it, and the focus.
+    bool menu_open_ = false;
+    BoardItem menu_item_;
+    std::vector<std::pair<std::string, LibraryAction>> menu_choices_;
+    int menu_focus_ = 0;
+    float menu_x_ = 0, menu_y_ = 0;
     std::function<void(const std::string &, const std::string &)> languages_;
     // Settings, in the order the focus goes through them: the account button (0), the
     // two language rows (1, 2), trailers (3), the four subtitle style rows (4 to 7), and

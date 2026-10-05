@@ -156,6 +156,12 @@ bool button_for(char letter, ui::Button &button)
     case 'r':
         button = ui::Button::Right;
         return true;
+    case 'o':
+        button = ui::Button::Options;
+        return true;
+    case 'v':
+        button = ui::Button::Voice;
+        return true;
     case 'a':
         button = ui::Button::Accept;
         return true;
@@ -222,6 +228,8 @@ int main(int argc, char **argv)
     std::ifstream file{argv[1], std::ios::binary};
     std::stringstream json;
     json << file.rdbuf();
+    static std::string board_json;
+    board_json = json.str();
     std::vector<ui::BoardRow> rows;
     if (!ui::parse_board(json.str(), rows))
         std::fprintf(stderr, "%s is not a board; showing an empty one\n", argv[1]);
@@ -319,6 +327,12 @@ int main(int argc, char **argv)
                 instance.set_speech_models(speech);
             },
             [](int) {});
+        instance.set_library_handler([](ui::LibraryAction action, const ui::BoardItem &item) {
+            std::printf("library action %d on %s\n", static_cast<int>(action), item.name.c_str());
+        });
+        instance.set_voice_handler([&instance] {
+            instance.set_voice(ui::VoicePhase::Listening, "Listening\xE2\x80\xA6");
+        });
         instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {
             std::printf("languages: %s / %s\n", audio.c_str(), subtitles.c_str());
         });
@@ -387,6 +401,22 @@ int main(int argc, char **argv)
             instance.set_player_tracks(tracks);
             if (trailer_image != 0)
                 instance.set_trailer(trailer_image, true, trailer_top, trailer_bottom);
+            {
+                // Sample rows stand in for whatever view the screen has moved to.
+                static ui::View served = ui::View::Board;
+                static std::string served_query;
+                if (instance.view() != served || instance.search_query() != served_query)
+                {
+                    served = instance.view();
+                    served_query = instance.search_query();
+                    instance.update(0.0f);
+                    std::vector<ui::BoardRow> again;
+                    ui::parse_board(board_json, again);
+                    if (served == ui::View::Search && !again.empty())
+                        again.erase(again.begin());
+                    instance.set_board(std::move(again));
+                }
+            }
             instance.update(seconds);
             instance.draw(framebuffer_width, framebuffer_height);
         };

@@ -16,6 +16,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -45,10 +46,13 @@ class CoreLink
     {
         title_open_.store(open, std::memory_order_relaxed);
     }
+    // Which rows the screen wants: 0 the board, 1 a search (for `query`), 2 the library.
+    void set_view(int view, const std::string &query);
 
     // Each returns true, and moves the value out, when something newer than the last one
     // taken has arrived.
-    bool take_board(std::vector<ui::BoardRow> &rows);
+    // `view` and `query` say which rows these are (see set_view).
+    bool take_board(std::vector<ui::BoardRow> &rows, int &view, std::string &query);
     bool take_details(ui::Details &details);
     bool take_account(ui::Account &account);
 
@@ -61,6 +65,10 @@ class CoreLink
     std::deque<std::function<void()>> commands_;
     bool stopping_ = false;
     std::optional<std::vector<ui::BoardRow>> board_;
+    int board_view_ = 0;       // the view and query `board_` was read for
+    std::string board_query_;
+    int view_ = 0;             // the view and query wanted
+    std::string query_;
     std::optional<ui::Details> details_;
     std::optional<ui::Account> account_;
     std::atomic<std::size_t> focused_catalog_{0};

@@ -72,6 +72,40 @@ void quiet(ggml_log_level, const char *, void *)
 }
 } // namespace
 
+std::string transcribe(const std::string &model, const std::vector<float> &samples,
+                       const std::string &language)
+{
+    std::lock_guard lock{engine_mutex};
+    if (engine == nullptr || engine_model != model)
+    {
+        if (engine != nullptr)
+            whisper_free(engine);
+        whisper_log_set(quiet, nullptr);
+        whisper_context_params settings = whisper_context_default_params();
+        settings.use_gpu = false;
+        engine = whisper_init_from_file_with_params(model.c_str(), settings);
+        engine_model = engine != nullptr ? model : std::string{};
+        if (engine == nullptr)
+            return {};
+    }
+    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.n_threads = 6;
+    params.no_context = true;
+    params.print_progress = false;
+    params.print_realtime = false;
+    params.print_timestamps = false;
+    params.print_special = false;
+    params.suppress_nst = true;
+    params.single_segment = true; // a few words, said once
+    params.language = whisper_is_multilingual(engine) ? (language.empty() ? "auto" : language.c_str()) : "en";
+    if (whisper_full(engine, params, samples.data(), static_cast<int>(samples.size())) != 0)
+        return {};
+    std::string said;
+    for (int segment = 0; segment < whisper_full_n_segments(engine); ++segment)
+        said += whisper_full_get_segment_text(engine, segment);
+    return said;
+}
+
 CalibrationResult calibrate(const std::string &model, const std::vector<float> &samples, double start,
                             const std::vector<Cue> &cues, const std::string &language)
 {

@@ -34,6 +34,7 @@ struct BoardItem
     // less than 0 when it is not; and the video it was left in.
     float progress = -1;
     std::string video;
+    bool in_library = false; // the account's library has it
 };
 
 struct BoardRow

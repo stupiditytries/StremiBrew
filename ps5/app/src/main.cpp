@@ -33,6 +33,7 @@
 #include "pad.hpp"
 #include "play_control.hpp"
 #include "trailer_control.hpp"
+#include "voice_search.hpp"
 #include "sounds.hpp"
 #include "theme.hpp"
 
@@ -57,6 +58,8 @@ extern "C"
     std::size_t stremio_core_details(char *out, std::size_t capacity);
     void stremio_core_set_languages(const char *audio, const char *subtitles);
     void stremio_http_set_cache(const char *path, std::uint32_t megabytes);
+    std::int32_t stremio_core_library_set(const char *id, bool add);
+    void stremio_core_forget_progress(const char *id);
     std::int32_t stremio_http_download(const char *url, const char *path, std::uint64_t *done,
                                        std::uint64_t *total);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
@@ -444,6 +447,25 @@ int main()
                 state->outcome = result == 0 ? 1 : -1;
             }}.detach();
         });
+    app.set_library_handler([&core](ui::LibraryAction action, const ui::BoardItem &item) {
+        const std::string id = item.id;
+        log_line("library: %s %s", action == ui::LibraryAction::Add      ? "add"
+                                   : action == ui::LibraryAction::Remove ? "remove"
+                                                                         : "forget progress of",
+                 id.c_str());
+        core.post([action, id] {
+            if (action == ui::LibraryAction::Forget)
+                stremio_core_forget_progress(id.c_str());
+            else
+                stremio_core_library_set(id.c_str(), action == ui::LibraryAction::Add);
+        });
+    });
+    // Voice search hears through the controller's microphone and uses the same speech
+    // model as subtitle calibration.
+    static ps5::VoiceSearch voice{app, [model_file] {
+                                      return speech.ready[speech.chosen] ? model_file(speech.chosen)
+                                                                         : std::string{};
+                                  }};
     playing.set_calibration_sources(
         [model_file] { return speech.ready[speech.chosen] ? model_file(speech.chosen) : std::string{}; },
         [&app] { return app.subtitle_style().calibration_offset; });
@@ -488,9 +510,16 @@ int main()
         const double frame_start = seconds_now();
 
         // Whatever the core's thread has ready is applied between frames.
+        // Rows for the view the screen is on; ones read for a view it has since left
+        // are dropped.
+        core.set_view(static_cast<int>(app.view()), app.search_query());
         std::vector<ui::BoardRow> rows;
-        if (core.take_board(rows))
+        int rows_view = 0;
+        std::string rows_query;
+        if (core.take_board(rows, rows_view, rows_query) && rows_view == static_cast<int>(app.view()) &&
+            rows_query == app.search_query())
             app.set_board(std::move(rows));
+        voice.frame();
         ui::Details details;
         if (core.take_details(details))
             app.set_details(std::move(details));

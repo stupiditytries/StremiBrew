@@ -28,6 +28,8 @@ pub struct Ps5Model {
     /// Signing in with a link code (see account.rs).
     pub auth_link: Link<LinkAuthKey>,
     pub board: CatalogsWithExtra,
+    /// What a search found: the catalogs that take a search, asked for the words.
+    pub search: CatalogsWithExtra,
     pub meta_details: MetaDetails,
     /// What is playing: the core keeps the library's watch progress from it.
     pub player: Player,
@@ -58,6 +60,7 @@ impl Ps5Model {
             ),
             auth_link: Link::default(),
             board: CatalogsWithExtra::default(),
+            search: CatalogsWithExtra::default(),
             meta_details: MetaDetails::default(),
             player: Player::default(),
             continue_watching,

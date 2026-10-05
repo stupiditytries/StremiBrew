@@ -31,6 +31,21 @@ constexpr Tab kTabs[] = {
 };
 constexpr int kTabCount = static_cast<int>(sizeof kTabs / sizeof kTabs[0]);
 
+// The on-screen keyboard: four rows of ten keys, and a row of wider ones under them.
+constexpr int kKeyColumns = 10, kKeyRows = 5;
+constexpr const char *kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.-"};
+// The last row's keys, each with the columns it spans.
+struct WideKey
+{
+    const char *label;
+    int first, last;
+};
+constexpr WideKey kWideKeys[] = {{"Space", 0, 3}, {"Delete", 4, 5}, {"Clear", 6, 7}, {"Done", 8, 9}};
+constexpr float kKeyWidth = units(3.4f), kKeyHeight = units(2.8f), kKeyGap = units(0.35f);
+constexpr float kKeyboardTop = kTopBarHeight + units(0.9f);
+// Seconds after the last letter before what has been typed is searched for.
+constexpr float kSearchSettle = 0.5f;
+
 } // namespace
 
 App::App(NVGcontext *context, const std::string &font_folder, const std::string &image_folder)
@@ -99,12 +114,177 @@ void App::set_intent_handler(std::function<void(Intent)> handler)
 }
 
 // Moves the focus from the sidebar into the selected tab's screen.
+View App::view() const
+{
+    if (!search_sent_.empty())
+        return View::Search;
+    return kTabs[selected_tab_].icon == Icon::Library ? View::Library : View::Board;
+}
+
+void App::set_library_handler(std::function<void(LibraryAction, const BoardItem &)> handler)
+{
+    library_handler_ = std::move(handler);
+}
+
+void App::set_voice_handler(std::function<void()> start)
+{
+    voice_handler_ = std::move(start);
+}
+
+void App::set_voice(VoicePhase phase, const std::string &message)
+{
+    if (phase != voice_phase_)
+        voice_shown_ = 0;
+    voice_phase_ = phase;
+    voice_message_ = message;
+}
+
+void App::set_search_query(const std::string &text)
+{
+    search_text_ = text;
+    search_sent_ = text;
+    search_wait_ = 0;
+    // A search is shown on the board's screen, whatever screen it was asked from.
+    if (kTabs[selected_tab_].icon != Icon::Board && kTabs[selected_tab_].icon != Icon::Library)
+        selected_tab_ = 0;
+    keyboard_open_ = false;
+    zone_ = Zone::Search;
+}
+
+void App::clear_search()
+{
+    search_text_.clear();
+    search_sent_.clear();
+    search_wait_ = 0;
+    keyboard_open_ = false;
+}
+
+// The on-screen keyboard. Returns false when it is not open.
+bool App::press_keyboard(Button button)
+{
+    if (!keyboard_open_)
+        return false;
+    const auto wide_at = [](int column) {
+        for (int index = 0; index < 4; ++index)
+            if (column >= kWideKeys[index].first && column <= kWideKeys[index].last)
+                return index;
+        return 0;
+    };
+    switch (button)
+    {
+    case Button::Left:
+        if (key_row_ == 4)
+        {
+            const int key = wide_at(key_column_);
+            if (key > 0)
+                key_column_ = kWideKeys[key - 1].first;
+        }
+        else if (key_column_ > 0)
+            --key_column_;
+        break;
+    case Button::Right:
+        if (key_row_ == 4)
+        {
+            const int key = wide_at(key_column_);
+            if (key < 3)
+                key_column_ = kWideKeys[key + 1].first;
+        }
+        else if (key_column_ + 1 < kKeyColumns)
+            ++key_column_;
+        break;
+    case Button::Up:
+        if (key_row_ > 0)
+            --key_row_;
+        break;
+    case Button::Down:
+        if (key_row_ + 1 < kKeyRows)
+            ++key_row_;
+        else
+        {
+            // Past the last row: on to what was found.
+            keyboard_open_ = false;
+            if (!rows_.empty())
+                zone_ = Zone::Rows;
+        }
+        break;
+    case Button::Accept:
+        if (key_row_ < 4)
+        {
+            if (search_text_.size() < 60)
+                search_text_ += kKeys[key_row_][key_column_];
+        }
+        else
+        {
+            switch (wide_at(key_column_))
+            {
+            case 0:
+                if (!search_text_.empty() && search_text_.back() != ' ')
+                    search_text_ += ' ';
+                break;
+            case 1:
+                if (!search_text_.empty())
+                    search_text_.pop_back();
+                break;
+            case 2:
+                search_text_.clear();
+                break;
+            default:
+                keyboard_open_ = false;
+                search_sent_ = search_text_;
+                if (!rows_.empty() && !search_text_.empty())
+                    zone_ = Zone::Rows;
+                break;
+            }
+        }
+        search_wait_ = 0;
+        break;
+    case Button::Back:
+        keyboard_open_ = false;
+        break;
+    case Button::Voice:
+        if (voice_handler_)
+            voice_handler_();
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+// The options menu. Returns false when it is not open.
+bool App::press_menu(Button button)
+{
+    if (!menu_open_)
+        return false;
+    const int count = static_cast<int>(menu_choices_.size());
+    if (button == Button::Up && menu_focus_ > 0)
+        --menu_focus_;
+    else if (button == Button::Down && menu_focus_ + 1 < count)
+        ++menu_focus_;
+    else if (button == Button::Accept && menu_focus_ < count)
+    {
+        const LibraryAction action = menu_choices_[static_cast<std::size_t>(menu_focus_)].second;
+        if (library_handler_)
+            library_handler_(action, menu_item_);
+        // The tile shows the change at once; the host's next rows confirm it.
+        for (BoardRow &row : rows_)
+            for (BoardItem &item : row.items)
+                if (item.id == menu_item_.id && action != LibraryAction::Forget)
+                    item.in_library = action == LibraryAction::Add;
+        menu_open_ = false;
+    }
+    else if (button == Button::Back || button == Button::Options)
+        menu_open_ = false;
+    return true;
+}
+
 void App::enter_tab()
 {
     selected_tab_ = navigation_focus_;
-    if (kTabs[selected_tab_].icon == Icon::Board)
+    clear_search();
+    if (kTabs[selected_tab_].icon == Icon::Board || kTabs[selected_tab_].icon == Icon::Library)
     {
-        if (!rows_.empty())
+        if (!rows_.empty() && view() == shown_view_)
             zone_ = Zone::Rows;
     }
     else if (kTabs[selected_tab_].icon == Icon::Settings)
@@ -329,6 +509,11 @@ std::size_t App::focus_mark() const
     add(title_open_ ? details_->focus_mark() : 0);
     add(static_cast<std::size_t>(content_focus_));
     add(static_cast<std::size_t>(speech_.chosen));
+    add(keyboard_open_);
+    add(static_cast<std::size_t>(key_row_ * 16 + key_column_));
+    add(search_text_.size());
+    add(menu_open_);
+    add(static_cast<std::size_t>(menu_focus_));
     add(trailers_);
     add(std::hash<std::string>{}(account_.audio_language + '/' + account_.subtitles_language));
     add(static_cast<std::size_t>(subtitle_style_.size * 7 + subtitle_style_.background * 131 +
@@ -367,6 +552,14 @@ void App::apply(Button button)
     }
     if (veil_rising_)
         return; // on the way to a title's page
+    if (press_menu(button) || press_keyboard(button))
+        return;
+    if (button == Button::Voice)
+    {
+        if (voice_handler_ && voice_phase_ != VoicePhase::Listening && voice_phase_ != VoicePhase::Working)
+            voice_handler_();
+        return;
+    }
     switch (zone_)
     {
     case Zone::Navigation:
@@ -430,9 +623,17 @@ void App::apply(Button button)
         }
         break;
     case Zone::Search:
-        if (button == Button::Down && !rows_.empty())
+        if (button == Button::Accept)
+        {
+            keyboard_open_ = true;
+            key_row_ = 1;
+            key_column_ = 0;
+        }
+        else if (button == Button::Down && !rows_.empty())
             zone_ = Zone::Rows;
-        else if (button == Button::Left)
+        else if (button == Button::Back && !search_text_.empty())
+            clear_search();
+        else if (button == Button::Left || button == Button::Back)
             zone_ = Zone::Navigation;
         break;
     case Zone::Rows:
@@ -443,7 +644,33 @@ void App::apply(Button button)
             break;
         }
         std::size_t &column = column_focus_[row_focus_];
-        if (button == Button::Left)
+        if (button == Button::Options)
+        {
+            // What can be done with the focused title, in a menu beside its tile.
+            if (const BoardItem *item = focused_item())
+            {
+                menu_item_ = *item;
+                menu_choices_.clear();
+                if (item->in_library)
+                    menu_choices_.push_back({"Remove from library", LibraryAction::Remove});
+                else
+                    menu_choices_.push_back({"Add to library", LibraryAction::Add});
+                if (item->progress >= 0)
+                    menu_choices_.push_back({"Remove from Continue watching", LibraryAction::Forget});
+                menu_focus_ = 0;
+                // Beside the tile, and kept on the screen.
+                const BoardRow &row = rows_[row_focus_];
+                const float width = card_width(row);
+                const float tile_left = kNavWidth + kContentInset + static_cast<float>(column) * width -
+                                        scroll_x_[row_focus_];
+                const float tile_top = kHeroHeight + units(0.4f) - scroll_y_ + row_top(row_focus_) +
+                                       kRowTitleSize * 1.2f + kRowTitleGap;
+                menu_x_ = std::min(tile_left + width + units(0.3f), kScreenWidth - units(22.0f));
+                menu_y_ = std::clamp(tile_top + units(1.0f), kTopBarHeight, kScreenHeight - units(9.0f));
+                menu_open_ = true;
+            }
+        }
+        else if (button == Button::Left)
         {
             if (column > 0)
                 --column;
@@ -495,6 +722,11 @@ void App::apply(Button button)
                     title_handler_.open(item->type, item->id);
             }
         }
+        else if (button == Button::Back && view() == View::Search)
+        {
+            // Out of the search, back to what was there before it.
+            clear_search();
+        }
         else if (button == Button::Back)
         {
             zone_ = Zone::Navigation;
@@ -512,6 +744,29 @@ void App::update(float seconds)
         player_->update(seconds);
     else
         player_leaving_ = std::max(0.0f, player_leaving_ - seconds / 0.35f);
+    // What has been typed is searched for once the typing pauses.
+    if (search_text_ != search_sent_)
+    {
+        search_wait_ += seconds;
+        if (search_wait_ >= kSearchSettle)
+            search_sent_ = search_text_;
+    }
+    // A change of view (another tab, a search begun or ended) empties the rows: the ones
+    // on screen belong to the view before, and the host's for this one are on their way.
+    if (view() != shown_view_ || search_sent_ != shown_query_)
+    {
+        shown_view_ = view();
+        shown_query_ = search_sent_;
+        menu_open_ = false;
+        set_board({});
+        scroll_y_ = scroll_y_target_ = 0;
+        if (zone_ == Zone::Rows)
+            zone_ = shown_view_ == View::Search ? Zone::Search : Zone::Navigation;
+        if (shown_view_ != View::Search)
+            navigation_focus_ = selected_tab_;
+    }
+    if (voice_phase_ == VoicePhase::Failed)
+        voice_shown_ += seconds;
     speech_shift_ = eased(speech_shift_, 0.0f, seconds);
     speech_alpha_ = std::min(1.0f, speech_alpha_ + seconds / 0.22f);
     if (title_open_)
@@ -707,10 +962,135 @@ void App::draw_top_bar()
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, kSearchTextSize);
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-    nvgFillColor(vg_, foreground(0.6f));
-    nvgText(vg_, x + units(1.5f), y + kSearchHeight / 2, "Search or paste link", nullptr);
-    draw_icon(vg_, Icon::Search, x + kSearchWidth - units(2.0f), y + kSearchHeight / 2,
-              units(1.4f), foreground_solid(0.62f));
+    const float middle = y + kSearchHeight / 2;
+    const bool voicing = voice_phase_ == VoicePhase::Listening || voice_phase_ == VoicePhase::Working ||
+                         (voice_phase_ == VoicePhase::Failed && voice_shown_ < 4.0f);
+    if (voicing)
+    {
+        nvgFillColor(vg_, voice_phase_ == VoicePhase::Failed ? foreground(0.75f) : accent());
+        fitted_text(vg_, x + units(1.5f), middle, kSearchWidth - units(5.0f), voice_message_);
+    }
+    else if (!search_text_.empty() || keyboard_open_)
+    {
+        nvgFillColor(vg_, foreground(1.0f));
+        const float end = nvgText(vg_, x + units(1.5f), middle, search_text_.c_str(), nullptr);
+        if (keyboard_open_)
+        {
+            // Where the next letter goes.
+            nvgBeginPath(vg_);
+            nvgRect(vg_, end + units(0.15f), middle - kSearchTextSize * 0.6f, units(0.12f), kSearchTextSize * 1.2f);
+            nvgFillColor(vg_, accent());
+            nvgFill(vg_);
+        }
+    }
+    else
+    {
+        nvgFillColor(vg_, foreground(0.6f));
+        nvgText(vg_, x + units(1.5f), middle, "Search", nullptr);
+    }
+    draw_icon(vg_, Icon::Search, x + kSearchWidth - units(2.0f), middle, units(1.4f),
+              foreground_solid(0.62f));
+    if (voice_handler_)
+    {
+        // Voice search: a microphone, and beside it the button that starts it (square).
+        const NVGcolor ink = voicing && voice_phase_ != VoicePhase::Failed ? accent() : foreground_solid(0.62f);
+        const float mic_x = x + kSearchWidth - units(6.6f), size = units(1.3f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, mic_x - size * 0.2f, middle - size * 0.55f, size * 0.4f, size * 0.72f, size * 0.2f);
+        nvgFillColor(vg_, ink);
+        nvgFill(vg_);
+        nvgBeginPath(vg_);
+        nvgArc(vg_, mic_x, middle - size * 0.05f, size * 0.38f, 0.0f, 3.14159265f, NVG_CW);
+        nvgMoveTo(vg_, mic_x, middle + size * 0.33f);
+        nvgLineTo(vg_, mic_x, middle + size * 0.58f);
+        nvgStrokeColor(vg_, ink);
+        nvgStrokeWidth(vg_, units(0.13f));
+        nvgLineCap(vg_, NVG_ROUND);
+        nvgStroke(vg_);
+        nvgLineCap(vg_, NVG_BUTT);
+        const float square = units(0.72f), square_x = mic_x + units(1.15f);
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, square_x, middle - square / 2, square, square, units(0.08f));
+        nvgStrokeColor(vg_, foreground_solid(0.62f));
+        nvgStrokeWidth(vg_, units(0.12f));
+        nvgStroke(vg_);
+    }
+}
+
+// The on-screen keyboard, under the search bar and over the featured area.
+void App::draw_keyboard()
+{
+    if (!keyboard_open_)
+        return;
+    const float pitch_x = kKeyWidth + kKeyGap, pitch_y = kKeyHeight + kKeyGap;
+    const float width = kKeyColumns * pitch_x - kKeyGap, height = kKeyRows * pitch_y - kKeyGap;
+    const float left = (kScreenWidth - width) / 2, top = kKeyboardTop;
+    const float pad = units(0.9f);
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, left - pad, top - pad, width + 2 * pad, height + 2 * pad, kRadius);
+    nvgFillColor(vg_, nvgRGBAf(0.05f, 0.05f, 0.06f, 0.96f));
+    nvgFill(vg_);
+    const auto key = [&](float x, float y, float key_width, const char *label, bool focused) {
+        nvgBeginPath(vg_);
+        nvgRoundedRect(vg_, x, y, key_width, kKeyHeight, units(0.5f));
+        nvgFillColor(vg_, overlay(focused ? 4.0f : 1.8f));
+        nvgFill(vg_);
+        if (focused)
+            focus_ring(vg_, x, y, key_width, kKeyHeight, units(0.5f));
+        nvgFontFace(vg_, "medium");
+        nvgFontSize(vg_, units(1.25f));
+        nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg_, foreground(focused ? 1.0f : 0.85f));
+        nvgText(vg_, x + key_width / 2, y + kKeyHeight / 2, label, nullptr);
+    };
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < kKeyColumns; ++column)
+        {
+            const char label[2] = {kKeys[row][column], 0};
+            key(left + column * pitch_x, top + row * pitch_y, kKeyWidth, label,
+                row == key_row_ && column == key_column_);
+        }
+    for (const WideKey &wide : kWideKeys)
+        key(left + wide.first * pitch_x, top + 4 * pitch_y,
+            (wide.last - wide.first + 1) * pitch_x - kKeyGap, wide.label,
+            key_row_ == 4 && key_column_ >= wide.first && key_column_ <= wide.last);
+}
+
+// The options menu, beside the tile it is for.
+void App::draw_menu()
+{
+    if (!menu_open_)
+        return;
+    const float row_height = units(3.0f), pad = units(0.6f);
+    nvgFontFace(vg_, "medium");
+    nvgFontSize(vg_, units(1.15f));
+    float width = units(14.0f);
+    for (const auto &choice : menu_choices_)
+        width = std::max(width, nvgTextBounds(vg_, 0, 0, choice.first.c_str(), nullptr, nullptr) + units(3.0f));
+    const float height = static_cast<float>(menu_choices_.size()) * row_height + 2 * pad;
+    nvgBeginPath(vg_);
+    nvgRoundedRect(vg_, menu_x_, menu_y_, width + 2 * pad, height, kRadius);
+    nvgFillColor(vg_, nvgRGBAf(0.09f, 0.09f, 0.11f, 0.98f));
+    nvgFill(vg_);
+    for (std::size_t index = 0; index < menu_choices_.size(); ++index)
+    {
+        const float x = menu_x_ + pad, y = menu_y_ + pad + static_cast<float>(index) * row_height;
+        const bool focused = static_cast<int>(index) == menu_focus_;
+        if (focused)
+        {
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, x, y, width, row_height - units(0.3f), kRadius * 0.7f);
+            nvgFillColor(vg_, overlay(3.5f));
+            nvgFill(vg_);
+            focus_ring(vg_, x, y, width, row_height - units(0.3f), kRadius * 0.7f);
+        }
+        nvgFontFace(vg_, "medium");
+        nvgFontSize(vg_, units(1.15f));
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg_, foreground(focused ? 1.0f : 0.8f));
+        nvgText(vg_, x + units(1.2f), y + (row_height - units(0.3f)) / 2, menu_choices_[index].first.c_str(),
+                nullptr);
+    }
 }
 
 void App::draw_row(const BoardRow &row, std::size_t index, float top)
@@ -779,6 +1159,20 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
             nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
             nvgFillColor(vg_, foreground(0.5f));
             nvgTextBox(vg_, x + units(0.5f), y + h / 2, w - units(1.0f), item.name.c_str(), nullptr);
+        }
+        if (item.in_library)
+        {
+            // A bookmark at the poster's top right corner: the library has this title.
+            const float mark = units(1.1f), mark_x = x + w - units(2.0f);
+            nvgBeginPath(vg_);
+            nvgMoveTo(vg_, mark_x, y);
+            nvgLineTo(vg_, mark_x + mark, y);
+            nvgLineTo(vg_, mark_x + mark, y + mark * 1.5f);
+            nvgLineTo(vg_, mark_x + mark / 2, y + mark * 1.1f);
+            nvgLineTo(vg_, mark_x, y + mark * 1.5f);
+            nvgClosePath(vg_);
+            nvgFillColor(vg_, accent());
+            nvgFill(vg_);
         }
         if (item.progress >= 0)
         {
@@ -1300,11 +1694,26 @@ void App::draw(int width, int height)
         nvgEndFrame(vg_);
         return;
     }
-    switch (kTabs[selected_tab_].icon)
+    switch (view() == View::Search ? Icon::Board : kTabs[selected_tab_].icon)
     {
     case Icon::Board:
+    case Icon::Library:
         draw_hero();
         draw_rows();
+        if (rows_.empty() && view() != View::Board)
+        {
+            // Nothing to show (yet): say why.
+            nvgFontFace(vg_, "regular");
+            nvgFontSize(vg_, units(1.3f));
+            nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+            nvgFillColor(vg_, foreground(0.55f));
+            const std::string text =
+                view() == View::Search
+                    ? "Searching for \xE2\x80\x9C" + search_sent_ + "\xE2\x80\x9D"
+                    : std::string{"Nothing in your library yet. Press OPTIONS on a title to add it."};
+            nvgText(vg_, kNavWidth + kContentInset + kCardPadding, kHeroHeight + units(1.0f), text.c_str(),
+                    nullptr);
+        }
         break;
     case Icon::Settings:
         draw_settings();
@@ -1315,6 +1724,8 @@ void App::draw(int width, int height)
     }
     draw_top_bar();
     draw_navigation();
+    draw_keyboard();
+    draw_menu();
     // On the way to or from a title's page the board is under a veil of black.
     if (veil_ > 0.0f)
     {
