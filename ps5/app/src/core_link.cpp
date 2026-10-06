@@ -19,6 +19,7 @@ extern "C"
     std::size_t stremio_core_details(char *out, std::size_t capacity);
     std::size_t stremio_core_calendar(char *out, std::size_t capacity);
     std::size_t stremio_core_addons(char *out, std::size_t capacity);
+    std::size_t stremio_core_discover(char *out, std::size_t capacity);
 }
 
 namespace ps5
@@ -121,6 +122,16 @@ bool CoreLink::take_calendar(ui::CalendarMonth &month)
     return true;
 }
 
+bool CoreLink::take_discover(ui::DiscoverData &discover)
+{
+    const std::lock_guard<std::mutex> lock{mutex_};
+    if (!discover_)
+        return false;
+    discover = std::move(*discover_);
+    discover_.reset();
+    return true;
+}
+
 bool CoreLink::take_addons(std::vector<ui::Addon> &addons)
 {
     const std::lock_guard<std::mutex> lock{mutex_};
@@ -193,6 +204,7 @@ void CoreLink::run()
             if (event.empty() || event.find("\"meta_details\"") != std::string_view::npos)
                 details_stale = true;
             if (event.empty() || event.find("\"calendar\"") != std::string_view::npos ||
+                event.find("\"discover\"") != std::string_view::npos ||
                 event.find("\"ctx\"") != std::string_view::npos)
                 page_stale = true;
         }
@@ -257,6 +269,17 @@ void CoreLink::run()
                 {
                     const std::lock_guard<std::mutex> lock{mutex_};
                     calendar_ = std::move(month);
+                }
+            }
+            else if (page == 3)
+            {
+                length = stremio_core_discover(text.data(), text.size());
+                ui::DiscoverData discover;
+                if (length != 0 && length < text.size() &&
+                    ui::parse_discover(std::string_view{text.data(), length}, discover))
+                {
+                    const std::lock_guard<std::mutex> lock{mutex_};
+                    discover_ = std::move(discover);
                 }
             }
             else

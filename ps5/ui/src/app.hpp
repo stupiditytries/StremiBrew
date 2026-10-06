@@ -52,6 +52,7 @@ enum class Page
     None,
     Calendar,
     Addons,
+    Discover,
 };
 
 // What the options menu can ask the host to do with a title.
@@ -133,6 +134,11 @@ class App
     void set_calendar_handler(std::function<void(int year, int month)> handler);
     void set_calendar(CalendarMonth month);
     void set_addons(std::vector<Addon> addons);
+    // Discover. The handler is asked to choose what is browsed: `kind` 0 the `index`th
+    // kind of title, 1 the catalog, 2 the genre; 3 asks for the catalog's next page and
+    // -1 opens Discover on its first catalog.
+    void set_discover_handler(std::function<void(int kind, int index)> handler);
+    void set_discover(DiscoverData data);
     // How images that are not in the cache folder yet are downloaded (see Images).
     void set_image_fetcher(
         std::function<void(const std::string &address, const std::string &file)> fetch,
@@ -234,6 +240,13 @@ class App
     void draw_calendar();
     const CalendarDay *calendar_day(int day) const;
     void press_addons(Button button);
+    void press_discover(Button button);
+    void update_discover(float seconds);
+    void draw_discover();
+    void discover_wait();
+    const std::vector<Choice> &discover_choices(int pill) const;
+    float discover_poster_height() const;
+    void draw_wheel(float x, float y, float alpha);
     void draw_addons();
     void apply(Button button);
     bool press_keyboard(Button button);
@@ -254,7 +267,6 @@ class App
     void draw_setting(int section, int row, float x, float y, float width, bool focused);
     void draw_account(float left, float top, float width);
     void draw_subtitle_sample(float left, float top, float width, float height);
-    void draw_unbuilt_tab();
 
     NVGcontext *vg_;
     std::unique_ptr<Images> images_;
@@ -311,6 +323,29 @@ class App
     std::function<void(int, int)> calendar_handler_;
     int calendar_day_ = 1, calendar_area_ = 1, calendar_entry_ = 0;
     float calendar_scroll_ = 0;
+    // Discover (see discover_screen.cpp): what the host supplied; where the focus is (0
+    // the pills along the top, 1 the grid), on which pill, and in an open pill's list;
+    // the grid's focus and scroll; the wait for a newly chosen catalog; and the title
+    // whose details are beside the grid.
+    DiscoverData discover_;
+    std::function<void(int, int)> discover_handler_;
+    int discover_area_ = 0, discover_pill_ = 0, discover_focus_ = 0;
+    bool discover_list_open_ = false;
+    int discover_list_focus_ = 0;
+    float discover_list_scroll_ = 0;
+    float discover_scroll_ = 0, discover_scroll_target_ = 0;
+    bool discover_hold_ = true, discover_enter_grid_ = true;
+    float discover_held_ = 0, discover_ignore_ = 0, discover_alpha_ = 0;
+    std::size_t discover_more_at_ = 0;
+    BoardItem discover_shown_;
+    bool discover_shown_valid_ = false;
+    std::string discover_target_;
+    float discover_dwell_ = 0, discover_shown_alpha_ = 0;
+    // Going to another tab brings its screen in with a short fade and rise; in Settings,
+    // what is beside the list fades from one section's to the next's.
+    float tab_reveal_ = 1;
+    int settings_side_ = 0;
+    float settings_side_alpha_ = 1;
     std::vector<Addon> addons_;
     int addons_focus_ = 0;
     float addons_scroll_ = 0, addons_scroll_target_ = 0;

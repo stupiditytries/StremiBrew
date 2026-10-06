@@ -377,6 +377,33 @@ int main(int argc, char **argv)
                 fill_month(year, number);
             instance.set_calendar(month);
         });
+        // Discover: the board's rows stand in for catalogs.
+        static ui::DiscoverData discover;
+        static int discover_catalog = 0;
+        const auto fill_discover = [] {
+            std::vector<ui::BoardRow> rows;
+            ui::parse_board(board_json, rows);
+            discover = ui::DiscoverData{};
+            discover.types = {{"Movie", discover_catalog % 2 == 0}, {"Series", discover_catalog % 2 == 1},
+                              {"Channel", false}, {"TV", false}};
+            discover.catalogs = {{"Popular", true}, {"Featured", false}, {"New", false}};
+            for (const char *genre : {"All", "Action", "Adventure", "Animation", "Biography", "Comedy", "Crime",
+                                      "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery"})
+                discover.genres.push_back({genre, discover.genres.empty()});
+            discover.more = false;
+            for (std::size_t row = static_cast<std::size_t>(discover_catalog) % 2; row < rows.size(); row += 2)
+                for (const ui::BoardItem &item : rows[row].items)
+                    discover.items.push_back(item);
+        };
+        instance.set_discover_handler([&instance, fill_discover](int kind, int index) {
+            if (kind == 0)
+                discover_catalog = index;
+            if (kind != 3)
+            {
+                fill_discover();
+                instance.set_discover(discover);
+            }
+        });
         instance.set_addons({
             {"Cinemeta", "3.0.13", "The official addon for movie and series catalogs", "", "v3-cinemeta.strem.io",
              {"movie", "series"}, {"catalog", "meta", "addon_catalog"}, true},

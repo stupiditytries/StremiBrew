@@ -65,6 +65,37 @@ bool parse_calendar(std::string_view json, CalendarMonth &month)
     return true;
 }
 
+bool parse_discover(std::string_view json, DiscoverData &discover)
+{
+    const auto document = nlohmann::json::parse(json, nullptr, false);
+    if (!document.is_object())
+        return false;
+    DiscoverData parsed;
+    const auto choices = [&](const char *key, std::vector<Choice> &list) {
+        if (const auto found = document.find(key); found != document.end() && found->is_array())
+            for (const auto &entry : *found)
+                list.push_back({text(entry, "name"), entry.value("selected", false)});
+    };
+    choices("types", parsed.types);
+    choices("catalogs", parsed.catalogs);
+    choices("genres", parsed.genres);
+    parsed.loading = document.value("loading", false);
+    parsed.more = document.value("more", false);
+    // The titles come as a board row, and are read as one.
+    if (const auto rows = document.find("rows"); rows != document.end() && rows->is_array())
+    {
+        std::vector<BoardRow> read;
+        if (parse_board(rows->dump(), read) && !read.empty())
+        {
+            parsed.shape = read[0].shape;
+            parsed.error = read[0].error;
+            parsed.items = std::move(read[0].items);
+        }
+    }
+    discover = std::move(parsed);
+    return true;
+}
+
 bool parse_addons(std::string_view json, std::vector<Addon> &addons)
 {
     const auto document = nlohmann::json::parse(json, nullptr, false);

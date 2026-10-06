@@ -857,6 +857,7 @@ pub extern "C" fn stremio_core_library_set(id: *const c_char, add: bool) -> i32 
                 .iter()
                 .chain(model.search.catalogs.iter())
                 .flat_map(|catalog| catalog.iter())
+                .chain(model.discover.catalog.iter())
                 .filter_map(|page| match &page.content {
                     Some(Loadable::Ready(items)) => Some(items),
                     _ => None,
@@ -956,6 +957,189 @@ pub extern "C" fn stremio_core_addons(out: *mut c_char, capacity: usize) -> usiz
         Ok(json) => copy_out(&json, out, capacity),
         Err(_) => 0,
     }
+}
+
+/// One of the choices Discover offers for a kind, a catalog or a genre.
+#[derive(serde::Serialize)]
+struct Choice<'a> {
+    name: std::borrow::Cow<'a, str>,
+    selected: bool,
+}
+
+/// Discover as the UI draws it: what can be chosen, and the chosen catalog's titles.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Discover<'a> {
+    types: Vec<Choice<'a>>,
+    catalogs: Vec<Choice<'a>>,
+    /// The catalog's first filter (most often its genres), when it has one.
+    genres: Vec<Choice<'a>>,
+    /// The first page is still on its way.
+    loading: bool,
+    /// There are more pages to ask for.
+    more: bool,
+    /// One row holding every title loaded so far.
+    rows: Vec<BoardRow<'a>>,
+}
+
+fn capitalised(text: &str) -> String {
+    let mut letters = text.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + letters.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Serialises Discover for the UI as JSON (see `Discover`). Returns the JSON's length,
+/// or 0 on failure.
+#[no_mangle]
+pub extern "C" fn stremio_core_discover(out: *mut c_char, capacity: usize) -> usize {
+    let Some(Ok(model)) = RUNTIME.get().map(|runtime| runtime.model()) else {
+        return 0;
+    };
+    let discover = &model.discover;
+    let pages = &discover.catalog;
+    let mut seen = std::collections::HashSet::new();
+    let found: Vec<_> = pages
+        .iter()
+        .filter_map(|page| match &page.content {
+            Some(Loadable::Ready(items)) => Some(items),
+            _ => None,
+        })
+        .flatten()
+        .filter(|item| seen.insert(item.id.as_str()))
+        .take(600)
+        .collect();
+    let shape = found.first().map(|item| &item.poster_shape);
+    let items = found
+        .iter()
+        .map(|item| BoardItem {
+            id: &item.id,
+            r#type: &item.r#type,
+            name: &item.name,
+            poster: item.poster.as_ref().map(|url| sharper_poster(url.as_str())),
+            poster_shape: shape.unwrap_or(&item.poster_shape),
+            release_info: item.release_info.as_deref().map(Into::into),
+            background: item.background.as_ref().map(|url| url.as_str().into()),
+            logo: item.logo.as_ref().map(|url| url.as_str().into()),
+            description: item.description.as_deref().map(Into::into),
+            runtime: item.runtime.as_deref().map(Into::into),
+            imdb_rating: item
+                .links
+                .iter()
+                .find(|link| link.category == IMDB_LINK_CATEGORY)
+                .map(|link| link.name.as_str().into()),
+            genres: item
+                .links
+                .iter()
+                .filter(|link| link.category == GENRES_LINK_CATEGORY)
+                .map(|link| link.name.as_str().into())
+                .take(3)
+                .collect(),
+            in_library: in_library(&model, &item.id),
+            progress: None,
+            video: None,
+        })
+        .collect();
+    let first = pages.first().and_then(|page| page.content.as_ref());
+    let view = Discover {
+        types: discover
+            .selectable
+            .types
+            .iter()
+            .map(|choice| Choice {
+                name: capitalised(&choice.r#type).into(),
+                selected: choice.selected,
+            })
+            .collect(),
+        catalogs: discover
+            .selectable
+            .catalogs
+            .iter()
+            .map(|choice| Choice {
+                name: choice.catalog.as_str().into(),
+                selected: choice.selected,
+            })
+            .collect(),
+        genres: discover
+            .selectable
+            .extra
+            .first()
+            .map(|extra| {
+                extra
+                    .options
+                    .iter()
+                    .map(|option| Choice {
+                        name: option.value.as_deref().unwrap_or("All").into(),
+                        selected: option.selected,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        loading: matches!(first, Some(Loadable::Loading)) || (first.is_none() && discover.selected.is_some()),
+        more: discover.selectable.next_page.is_some(),
+        rows: vec![BoardRow {
+            index: 0,
+            id: "discover",
+            name: "".into(),
+            r#type: "",
+            addon: "",
+            state: match first {
+                Some(Loadable::Err(_)) => "error",
+                Some(Loadable::Ready(_)) => "ready",
+                _ => "loading",
+            },
+            error: match first {
+                Some(Loadable::Err(error)) => Some(format!("{error:?}")),
+                _ => None,
+            },
+            items,
+        }],
+    };
+    match serde_json::to_string(&view) {
+        Ok(json) => copy_out(&json, out, capacity),
+        Err(_) => 0,
+    }
+}
+
+/// Discover's choices. `kind` 0 picks the `index`th kind of title, 1 the `index`th catalog,
+/// 2 the `index`th genre; 3 asks for the chosen catalog's next page; anything else opens
+/// Discover on its first catalog (when nothing is chosen yet).
+#[no_mangle]
+pub extern "C" fn stremio_core_discover_choose(kind: i32, index: u32) {
+    use stremio_core::models::catalog_with_filters::Selected as Chosen;
+    use stremio_core::runtime::msg::ActionCatalogWithFilters;
+    let Some(runtime) = RUNTIME.get() else {
+        return;
+    };
+    let index = index as usize;
+    let action = {
+        let Ok(model) = runtime.model() else {
+            return;
+        };
+        let offered = &model.discover.selectable;
+        let request = match kind {
+            0 => offered.types.get(index).map(|choice| choice.request.clone()),
+            1 => offered.catalogs.get(index).map(|choice| choice.request.clone()),
+            2 => offered
+                .extra
+                .first()
+                .and_then(|extra| extra.options.get(index))
+                .map(|choice| choice.request.clone()),
+            _ => None,
+        };
+        match (kind, request) {
+            (0..=2, Some(request)) => Action::Load(ActionLoad::CatalogWithFilters(Some(Chosen { request }))),
+            (0..=2, None) => return,
+            (3, _) => Action::CatalogWithFilters(ActionCatalogWithFilters::LoadNextPage),
+            _ if model.discover.selected.is_some() => return,
+            _ => Action::Load(ActionLoad::CatalogWithFilters(None)),
+        }
+    };
+    runtime.dispatch(RuntimeAction {
+        field: Some(Ps5ModelField::Discover),
+        action,
+    });
 }
 
 /// Finds a title's trailer (see `trailer.rs`) and writes its address to `out`. This asks

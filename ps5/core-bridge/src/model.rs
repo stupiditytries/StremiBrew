@@ -3,6 +3,7 @@
 //! built.
 
 use stremio_core::models::calendar::Calendar;
+use stremio_core::models::catalog_with_filters::CatalogWithFilters;
 use stremio_core::models::catalogs_with_extra::CatalogsWithExtra;
 use stremio_core::models::continue_watching_preview::ContinueWatchingPreview;
 use stremio_core::models::player::Player;
@@ -15,6 +16,7 @@ use stremio_core::types::events::DismissedEventsBucket;
 use stremio_core::types::library::LibraryBucket;
 use stremio_core::types::notifications::NotificationsBucket;
 use stremio_core::types::profile::Profile;
+use stremio_core::types::resource::MetaItemPreview;
 use stremio_core::types::search_history::SearchHistoryBucket;
 use stremio_core::types::server_urls::ServerUrlsBucket;
 use stremio_core::types::streams::StreamsBucket;
@@ -38,6 +40,8 @@ pub struct Ps5Model {
     pub continue_watching: ContinueWatchingPreview,
     /// What the library's series release on each day of a month.
     pub calendar: Calendar,
+    /// Discover: one catalog at a time, chosen by kind, catalog and genre.
+    pub discover: CatalogWithFilters<MetaItemPreview>,
 }
 
 impl Ps5Model {
@@ -51,6 +55,7 @@ impl Ps5Model {
         dismissed_events: DismissedEventsBucket,
     ) -> (Ps5Model, Effects) {
         let (continue_watching, _) = ContinueWatchingPreview::new(&library, &notifications);
+        let (discover, _) = CatalogWithFilters::<MetaItemPreview>::new(&profile);
         let model = Ps5Model {
             ctx: Ctx::new(
                 profile,
@@ -68,6 +73,7 @@ impl Ps5Model {
             player: Player::default(),
             continue_watching,
             calendar: Calendar::default(),
+            discover,
         };
         (model, Effects::none().unchanged())
     }

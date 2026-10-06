@@ -61,6 +61,7 @@ extern "C"
     std::int32_t stremio_core_library_set(const char *id, bool add);
     void stremio_core_forget_progress(const char *id);
     void stremio_core_calendar_load(std::int32_t year, std::uint32_t month);
+    void stremio_core_discover_choose(std::int32_t kind, std::uint32_t index);
     std::int32_t stremio_http_download(const char *url, const char *path, std::uint64_t *done,
                                        std::uint64_t *total);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
@@ -464,6 +465,9 @@ int main()
     // Searches are typed on the console's own keyboard (which also takes dictation).
     static ps5::Keyboard keyboard;
     app.set_keyboard_handler([](const std::string &text) { return keyboard.open(text); });
+    app.set_discover_handler([&core](int kind, int index) {
+        core.post([kind, index] { stremio_core_discover_choose(kind, static_cast<std::uint32_t>(index)); });
+    });
     app.set_calendar_handler([&core](int year, int month) {
         core.post([year, month] { stremio_core_calendar_load(year, static_cast<std::uint32_t>(month)); });
     });
@@ -527,6 +531,9 @@ int main()
         std::vector<ui::Addon> addons;
         if (core.take_addons(addons))
             app.set_addons(std::move(addons));
+        ui::DiscoverData discover;
+        if (core.take_discover(discover))
+            app.set_discover(std::move(discover));
         ui::Details details;
         if (core.take_details(details))
             app.set_details(std::move(details));

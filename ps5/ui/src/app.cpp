@@ -133,7 +133,10 @@ Page App::page() const
     if (view() == View::Search)
         return Page::None;
     const Icon tab = kTabs[selected_tab_].icon;
-    return tab == Icon::Calendar ? Page::Calendar : tab == Icon::Addons ? Page::Addons : Page::None;
+    return tab == Icon::Calendar   ? Page::Calendar
+           : tab == Icon::Addons   ? Page::Addons
+           : tab == Icon::Discover ? Page::Discover
+                                   : Page::None;
 }
 
 void App::submit_search(const std::string &text)
@@ -256,6 +259,9 @@ bool App::press_menu(Button button)
             for (BoardItem &item : row.items)
                 if (item.id == menu_item_.id && action != LibraryAction::Forget)
                     item.in_library = action == LibraryAction::Add;
+        for (BoardItem &item : discover_.items)
+            if (item.id == menu_item_.id && action != LibraryAction::Forget)
+                item.in_library = action == LibraryAction::Add;
         menu_open_ = false;
     }
     else if (button == Button::Back || button == Button::Options)
@@ -265,6 +271,8 @@ bool App::press_menu(Button button)
 
 void App::enter_tab()
 {
+    if (selected_tab_ != navigation_focus_)
+        tab_reveal_ = 0;
     selected_tab_ = navigation_focus_;
     clear_search();
     if (kTabs[selected_tab_].icon == Icon::Board || kTabs[selected_tab_].icon == Icon::Library)
@@ -272,13 +280,16 @@ void App::enter_tab()
         if (!rows_.empty() && view() == shown_view_)
             zone_ = Zone::Rows;
     }
-    else if (kTabs[selected_tab_].icon == Icon::Discover)
-    {
-        // Not built yet: nothing in it to take the focus.
-    }
     else
     {
         zone_ = Zone::Content;
+        if (kTabs[selected_tab_].icon == Icon::Discover)
+        {
+            discover_list_open_ = false;
+            discover_area_ = discover_.items.empty() || discover_hold_ ? 0 : 1;
+            if (discover_.types.empty() && discover_handler_)
+                discover_handler_(-1, 0);
+        }
         if (kTabs[selected_tab_].icon == Icon::Calendar)
         {
             calendar_area_ = 1;
@@ -574,6 +585,8 @@ std::size_t App::focus_mark() const
     add(static_cast<std::size_t>(calendar_area_ * 4096 + calendar_day_ * 64 + calendar_entry_));
     add(static_cast<std::size_t>(calendar_.year * 12 + calendar_.month));
     add(static_cast<std::size_t>(addons_focus_));
+    add(static_cast<std::size_t>(discover_area_ * 8 + discover_pill_ + (discover_list_open_ ? 64 : 0)));
+    add(static_cast<std::size_t>(discover_focus_ * 64 + discover_list_focus_));
     add(static_cast<std::size_t>(speech_.chosen));
     add(keyboard_open_);
     add(static_cast<std::size_t>(key_row_ * 16 + key_column_));
@@ -633,6 +646,8 @@ void App::apply(Button button)
     case Zone::Content:
         if (kTabs[selected_tab_].icon == Icon::Calendar)
             press_calendar(button);
+        else if (kTabs[selected_tab_].icon == Icon::Discover)
+            press_discover(button);
         else if (kTabs[selected_tab_].icon == Icon::Addons)
             press_addons(button);
         else
@@ -654,7 +669,7 @@ void App::apply(Button button)
         }
         else if (button == Button::Down && rows_under && !rows_.empty())
             zone_ = Zone::Rows;
-        else if (button == Button::Down && !rows_under && kTabs[selected_tab_].icon != Icon::Discover)
+        else if (button == Button::Down && !rows_under)
             zone_ = Zone::Content;
         else if (button == Button::Back && view() == View::Search)
             submit_search({});
@@ -798,6 +813,8 @@ void App::update(float seconds)
     }
     else
         content_veil_ = std::max(0.0f, content_veil_ - seconds / 0.3f);
+    update_discover(seconds);
+    tab_reveal_ = std::min(1.0f, tab_reveal_ + seconds / 0.28f);
     wheel_turn_ += seconds;
     wheel_alpha_ = swap_holding_ ? std::min(1.0f, wheel_alpha_ + seconds / 0.25f)
                                  : std::max(0.0f, wheel_alpha_ - seconds / 0.15f);
@@ -1413,15 +1430,23 @@ void App::draw_rows()
     nvgRestore(vg_);
 }
 
-void App::draw_unbuilt_tab()
+// A turning wheel: something is on its way.
+void App::draw_wheel(float x, float y, float alpha)
 {
-    nvgFontFace(vg_, "regular");
-    nvgFontSize(vg_, units(1.3f));
-    nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-    nvgFillColor(vg_, foreground(0.5f));
-    const std::string text = std::string{kTabs[selected_tab_].label} + " is not built yet.";
-    nvgText(vg_, kNavWidth + kContentInset + kCardPadding, kTopBarHeight + units(0.5f),
-            text.c_str(), nullptr);
+    if (alpha <= 0.0f)
+        return;
+    const float radius = units(1.6f), turn = wheel_turn_ * 5.5f;
+    nvgBeginPath(vg_);
+    nvgCircle(vg_, x, y, radius);
+    nvgStrokeColor(vg_, foreground(0.12f * alpha));
+    nvgStrokeWidth(vg_, units(0.28f));
+    nvgStroke(vg_);
+    nvgBeginPath(vg_);
+    nvgArc(vg_, x, y, radius, turn, turn + 1.7f, NVG_CW);
+    nvgStrokeColor(vg_, accent(alpha));
+    nvgLineCap(vg_, NVG_ROUND);
+    nvgStroke(vg_);
+    nvgLineCap(vg_, NVG_BUTT);
 }
 
 void App::draw(int width, int height)
@@ -1458,6 +1483,10 @@ void App::draw(int width, int height)
         nvgEndFrame(vg_);
         return;
     }
+    // A screen newly switched to rises a little into place as it fades in.
+    const float arrived = 1.0f - (1.0f - tab_reveal_) * (1.0f - tab_reveal_);
+    nvgSave(vg_);
+    nvgTranslate(vg_, 0, (1.0f - arrived) * units(1.0f));
     switch (shown_view_ == View::Search ? Icon::Board : kTabs[selected_tab_].icon)
     {
     case Icon::Board:
@@ -1473,38 +1502,28 @@ void App::draw(int width, int height)
     case Icon::Addons:
         draw_addons();
         break;
+    case Icon::Discover:
+        draw_discover();
+        break;
     case Icon::Settings:
         draw_settings();
         break;
     default:
-        draw_unbuilt_tab();
         break;
     }
-    // Between one search's results and the next the screen is under black.
-    if (content_veil_ > 0.0f)
+    nvgRestore(vg_);
+    // Between one search's results and the next, and while a screen newly switched to
+    // arrives, the screen is under black.
+    const float veil = std::max(content_veil_, 1.0f - arrived);
+    if (veil > 0.0f)
     {
         nvgBeginPath(vg_);
         nvgRect(vg_, kNavWidth, 0, kScreenWidth - kNavWidth, kScreenHeight);
-        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, content_veil_));
+        nvgFillColor(vg_, nvgRGBAf(0, 0, 0, veil));
         nvgFill(vg_);
     }
-    if (wheel_alpha_ > 0.0f)
-    {
-        // A wheel while a search is on its way.
-        const float x = kNavWidth + (kScreenWidth - kNavWidth) / 2, y = kScreenHeight / 2;
-        const float radius = units(1.6f), turn = wheel_turn_ * 5.5f;
-        nvgBeginPath(vg_);
-        nvgCircle(vg_, x, y, radius);
-        nvgStrokeColor(vg_, foreground(0.12f * wheel_alpha_));
-        nvgStrokeWidth(vg_, units(0.28f));
-        nvgStroke(vg_);
-        nvgBeginPath(vg_);
-        nvgArc(vg_, x, y, radius, turn, turn + 1.7f, NVG_CW);
-        nvgStrokeColor(vg_, accent(wheel_alpha_));
-        nvgLineCap(vg_, NVG_ROUND);
-        nvgStroke(vg_);
-        nvgLineCap(vg_, NVG_BUTT);
-    }
+    // A wheel while a search is on its way.
+    draw_wheel(kNavWidth + (kScreenWidth - kNavWidth) / 2, kScreenHeight / 2, wheel_alpha_);
     if (rows_.empty() && shown_view_ != View::Board && !swap_pending_ && !swap_holding_ &&
         (shown_view_ == View::Search || kTabs[selected_tab_].icon == Icon::Library))
     {

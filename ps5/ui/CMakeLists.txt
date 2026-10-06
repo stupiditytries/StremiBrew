@@ -48,6 +48,7 @@ add_library(stremio_ui STATIC
     src/draw_util.cpp
     src/icons.cpp
     src/images.cpp
+    src/discover_screen.cpp
     src/pages_data.cpp
     src/pages_screen.cpp
     src/player_screen.cpp

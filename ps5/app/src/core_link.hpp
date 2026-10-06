@@ -50,7 +50,7 @@ class CoreLink
     // Which rows the screen wants: 0 the board, 1 a search (for `query`), 2 the library.
     void set_view(int view, const std::string &query);
     // Which other screen is on show and so kept fresh: 0 none, 1 the calendar, 2 the
-    // add-ons.
+    // add-ons, 3 Discover.
     void set_page(int page)
     {
         page_.store(page, std::memory_order_relaxed);
@@ -64,6 +64,7 @@ class CoreLink
     bool take_account(ui::Account &account);
     bool take_calendar(ui::CalendarMonth &month);
     bool take_addons(std::vector<ui::Addon> &addons);
+    bool take_discover(ui::DiscoverData &discover);
 
   private:
     void run();
@@ -82,6 +83,7 @@ class CoreLink
     std::optional<ui::Account> account_;
     std::optional<ui::CalendarMonth> calendar_;
     std::optional<std::vector<ui::Addon>> addons_;
+    std::optional<ui::DiscoverData> discover_;
     std::atomic<int> page_{0};
     std::atomic<std::size_t> focused_catalog_{0};
     std::atomic<bool> title_open_{false};

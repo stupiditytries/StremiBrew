@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "board_data.hpp"
+
 namespace ui
 {
 // An episode released on a day: the series it belongs to, and the episode itself.
@@ -40,8 +42,26 @@ struct Addon
     bool official = false;
 };
 
+// Something Discover offers to browse by: a kind of title, a catalog, a genre.
+struct Choice
+{
+    std::string name;
+    bool selected = false;
+};
+
+struct DiscoverData
+{
+    std::vector<Choice> types, catalogs, genres; // genres is empty for a catalog without any
+    bool loading = false;                        // the catalog's first page is on its way
+    bool more = false;                           // it has further pages
+    std::string error;
+    PosterShape shape = PosterShape::Poster;
+    std::vector<BoardItem> items;
+};
+
 // Each parses the bridge's JSON, returning false (and leaving its result alone) when it
 // is not valid.
 bool parse_calendar(std::string_view json, CalendarMonth &month);
 bool parse_addons(std::string_view json, std::vector<Addon> &addons);
+bool parse_discover(std::string_view json, DiscoverData &discover);
 } // namespace ui

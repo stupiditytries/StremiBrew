@@ -387,17 +387,29 @@ void App::draw_settings()
     // Beside the list, what goes with the section the focus is in.
     const float side = left + width + units(4.0f), side_width = kScreenWidth - side - units(4.0f);
     float side_top = kTop;
-    if (settings_section_ == 0)
+    // It fades out, changes, and fades in as the focus goes from section to section.
+    if (settings_side_ != settings_section_)
+    {
+        settings_side_alpha_ = std::max(0.0f, settings_side_alpha_ - frame_seconds_ / 0.1f);
+        if (settings_side_alpha_ <= 0.0f)
+            settings_side_ = settings_section_;
+    }
+    else
+        settings_side_alpha_ = std::min(1.0f, settings_side_alpha_ + frame_seconds_ / 0.22f);
+    nvgSave(vg_);
+    nvgGlobalAlpha(vg_, settings_side_alpha_);
+    nvgTranslate(vg_, (1.0f - settings_side_alpha_) * units(0.8f), 0);
+    if (settings_side_ == 0)
     {
         side_top += heading(side, side_top, "Account");
         draw_account(side, side_top, side_width);
     }
-    else if (settings_section_ == 2)
+    else if (settings_side_ == 2)
     {
         side_top += heading(side, side_top, "Preview");
         draw_subtitle_sample(side, side_top, side_width, units(9.0f));
     }
-    else if (settings_section_ == 3)
+    else if (settings_side_ == 3)
     {
         side_top += heading(side, side_top, "Auto-calibrate");
         nvgFontFace(vg_, "regular");
@@ -407,5 +419,6 @@ void App::draw_settings()
         nvgTextBox(vg_, side, side_top, side_width,
                    "In the player, hold triangle to time the subtitles to what is being said.", nullptr);
     }
+    nvgRestore(vg_);
 }
 } // namespace ui
