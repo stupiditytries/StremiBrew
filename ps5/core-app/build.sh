@@ -24,7 +24,7 @@ printf '#!/bin/sh\nPS5_PAYLOAD_SDK=%s exec sh %s/tooling/prospero-clang18 "$@"\n
     "$sdk" "$TEMPLATE" > "$WORK/bin/ps5-cc"
 chmod +x "$WORK/bin/ps5-cc"
 export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
-(cd "$REPO/ps5/core-bridge" && CARGO_TARGET_DIR=$WORK/target-bridge cargo build --release \
+(cd "$REPO/shared/core-bridge" && CARGO_TARGET_DIR=$WORK/target-bridge cargo build --release \
     --lib --target "$target" -Zbuild-std=std,panic_abort -Zjson-target-spec)
 rust_lib=$WORK/target-bridge/x86_64-ps5-freebsd/release/libstremio_core_ps5.a
 

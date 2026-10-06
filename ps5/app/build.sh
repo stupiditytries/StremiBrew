@@ -32,7 +32,7 @@ chmod +x "$WORK/bin/ps5-cc"
 export RUSTFLAGS='--cfg libc_unstable_freebsd_version="11"'
 bash "$REPO/ps5/patch-rust-src.sh"
 export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
-(cd "$REPO/ps5/core-bridge" && CARGO_TARGET_DIR=$WORK/target-bridge cargo build --release \
+(cd "$REPO/shared/core-bridge" && CARGO_TARGET_DIR=$WORK/target-bridge cargo build --release \
     --lib --target "$REPO/ps5/x86_64-ps5-freebsd.json" -Zbuild-std=std,panic_abort \
     -Zjson-target-spec)
 "$sdk/bin/prospero-nm" -u "$WORK/target-bridge/x86_64-ps5-freebsd/release/libstremio_core_ps5.a" \
@@ -44,7 +44,7 @@ export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
 
 # 2. C and C++ sources: the app, the UI, the drawing and image libraries, the stand-ins for
 #    functions the console lacks, the app's heap, and the template's startup code.
-ui=$REPO/ps5/ui
+ui=$REPO/shared/ui
 includes=(-I"$ui/src" -I"$ui/third_party/nanovg" -I"$ui/third_party"
     -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp"
     -I"$GL_SDK/include" -I"$ffmpeg/include" -I"$WHISPER/include" -I"$WHISPER/ggml/include"

@@ -30,7 +30,7 @@
 #include "stb_image_write.h"
 #include "stb_image.h"
 
-#include "../../app/src/black_bars.hpp"
+#include "../../../ps5/app/src/black_bars.hpp"
 
 #include "app.hpp"
 #include "board_data.hpp"
