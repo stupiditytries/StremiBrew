@@ -341,6 +341,8 @@ class App
     bool discover_shown_valid_ = false;
     std::string discover_target_;
     float discover_dwell_ = 0, discover_shown_alpha_ = 0;
+    float discover_shown_wait_ = 0; // seconds its details have waited for their pictures
+    bool discover_named_ = false;   // its name is written out: it has no logo
     // Going to another tab brings its screen in with a short fade and rise; in Settings,
     // what is beside the list fades from one section's to the next's.
     float tab_reveal_ = 1;

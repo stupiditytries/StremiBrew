@@ -873,6 +873,14 @@ void App::update(float seconds)
     {
         hero_dwell_ += seconds;
     }
+    // The featured area's copy keeps up with facts that arrive after it was taken (a
+    // title part-way through gets its description and the rest a moment after the row).
+    if (hero_valid_ && item != nullptr && item->id == hero_.id &&
+        (item->description != hero_.description || item->release_info != hero_.release_info ||
+         item->runtime != hero_.runtime || item->imdb_rating != hero_.imdb_rating ||
+         item->genres.size() != hero_.genres.size() || item->logo != hero_.logo ||
+         item->background != hero_.background))
+        hero_ = *item;
     const bool stale = hero_valid_ ? hero_.id != hero_target_ : item != nullptr;
     if (stale && hero_dwell_ >= kHeroDwell)
     {

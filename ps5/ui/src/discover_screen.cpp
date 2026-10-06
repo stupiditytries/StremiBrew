@@ -257,10 +257,28 @@ void App::update_discover(float seconds)
             discover_shown_valid_ = item != nullptr;
             if (item != nullptr)
                 discover_shown_ = *item;
+            discover_shown_wait_ = 0;
+            discover_named_ = false;
         }
     }
     else if (!stale && discover_shown_valid_)
-        discover_shown_alpha_ = std::min(1.0f, discover_shown_alpha_ + seconds / 0.3f);
+    {
+        // A title's details come in whole: they wait for its artwork and logo (a while
+        // at most), and its name is written out only if there turns out to be no logo.
+        const Images::State art = images_->get(discover_shown_.background, kArtPixels).state;
+        const Images::State logo = images_->get(discover_shown_.logo, kLogoPixels).state;
+        const bool waiting = art == Images::State::Pending || logo == Images::State::Pending;
+        if (waiting && discover_shown_alpha_ <= 0.0f && discover_shown_wait_ < kHeroLogoWait)
+            discover_shown_wait_ += seconds;
+        else
+        {
+            if (logo != Images::State::Ready && discover_shown_alpha_ <= 0.0f)
+                discover_named_ = true;
+            else if (logo == Images::State::Unavailable)
+                discover_named_ = true;
+            discover_shown_alpha_ = std::min(1.0f, discover_shown_alpha_ + seconds / 0.3f);
+        }
+    }
 }
 
 void App::draw_discover()
@@ -367,50 +385,89 @@ void App::draw_discover()
                                                 nvgRGBAf(0, 0, 0, 0), nvgRGBAf(0, 0, 0, 1)));
             nvgFill(vg_);
         }
-        float y = pane_top + art_height - units(3.4f);
+        const float text_x = kPaneLeft + units(0.4f), text_width = kPaneWidth - units(0.8f);
+        // The title, under the artwork: its logo, or its name written out when it has no
+        // logo that can be drawn (see update_discover for the wait before deciding so).
+        const float logo_height = units(4.4f);
+        float y = pane_top + art_height + units(0.8f);
         const Images::Texture logo = images_->get(item.logo, kLogoPixels);
-        if (logo.state != Images::State::Ready ||
-            !draw_logo(vg_, kPaneLeft + units(0.4f), y, kPaneWidth * 0.62f, units(4.4f), logo, fade))
+        if (!discover_named_ && logo.state == Images::State::Ready &&
+            !draw_logo(vg_, text_x, y, kPaneWidth * 0.62f, logo_height, logo, fade))
+            discover_named_ = true; // a logo with nothing in it
+        if (discover_named_)
         {
             nvgFontFace(vg_, "bold");
             nvgFontSize(vg_, units(1.9f));
             nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_BOTTOM);
             nvgFillColor(vg_, foreground(fade));
-            fitted_text(vg_, kPaneLeft + units(0.4f), y + units(4.4f), kPaneWidth - units(0.8f), item.name);
+            fitted_text(vg_, text_x, y + logo_height, text_width, item.name);
         }
-        y += units(4.4f) + units(1.0f);
+        y += logo_height + units(2.0f);
 
-        // Its key facts, then its genres, then what it is about.
-        std::string facts;
-        const auto add = [&facts](const std::string &text) {
-            if (!text.empty())
-                facts += (facts.empty() ? "" : "  \xC2\xB7  ") + text;
-        };
-        add(item.imdb_rating.empty() ? std::string{} : "IMDb " + item.imdb_rating);
-        add(item.release_info);
-        add(item.runtime);
-        nvgFontFace(vg_, "medium");
-        nvgFontSize(vg_, units(1.0f));
-        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-        nvgFillColor(vg_, foreground(0.85f * fade));
-        fitted_text(vg_, kPaneLeft + units(0.4f), y, kPaneWidth - units(0.8f), facts);
-        y += units(1.6f);
-        std::string genres;
-        for (const std::string &genre : item.genres)
-            genres += (genres.empty() ? "" : ", ") + genre;
-        if (!genres.empty())
+        // Its key facts on one line: the IMDb score beside its badge, the year, the
+        // running time.
         {
-            nvgFillColor(vg_, accent(fade));
-            fitted_text(vg_, kPaneLeft + units(0.4f), y, kPaneWidth - units(0.8f), genres);
-            y += units(1.6f);
+            float x = text_x;
+            const float middle = y;
+            nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+            if (!item.imdb_rating.empty())
+            {
+                nvgFontFace(vg_, "bold");
+                nvgFontSize(vg_, units(0.85f));
+                const float badge = nvgTextBounds(vg_, 0, 0, "IMDb", nullptr, nullptr) + units(0.7f);
+                nvgBeginPath(vg_);
+                nvgRoundedRect(vg_, x, middle - units(0.7f), badge, units(1.4f), units(0.25f));
+                nvgFillColor(vg_, nvgTransRGBAf(imdb_yellow(), fade));
+                nvgFill(vg_);
+                nvgFillColor(vg_, nvgRGBAf(0, 0, 0, fade));
+                nvgText(vg_, x + units(0.35f), middle, "IMDb", nullptr);
+                nvgFontFace(vg_, "semibold");
+                nvgFontSize(vg_, units(1.05f));
+                nvgFillColor(vg_, foreground(fade));
+                x = nvgText(vg_, x + badge + units(0.5f), middle, item.imdb_rating.c_str(), nullptr);
+            }
+            for (const std::string *fact : {&item.release_info, &item.runtime})
+            {
+                if (fact->empty())
+                    continue;
+                nvgFontSize(vg_, units(1.05f));
+                if (x > text_x)
+                {
+                    nvgFontFace(vg_, "regular");
+                    nvgFillColor(vg_, foreground(0.35f * fade));
+                    x = nvgText(vg_, x + units(0.6f), middle, "\xC2\xB7", nullptr) + units(0.6f);
+                }
+                nvgFontFace(vg_, "medium");
+                nvgFillColor(vg_, foreground(0.8f * fade));
+                x = nvgText(vg_, x, middle, fact->c_str(), nullptr);
+            }
         }
-        y += units(0.2f);
+        y += units(2.7f);
+        if (!item.genres.empty())
+        {
+            // Its genres, each on a label.
+            float x = text_x;
+            nvgFontFace(vg_, "medium");
+            nvgFontSize(vg_, units(0.9f));
+            nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+            for (const std::string &genre : item.genres)
+            {
+                const float width = nvgTextBounds(vg_, 0, 0, genre.c_str(), nullptr, nullptr) + units(1.4f);
+                nvgBeginPath(vg_);
+                nvgRoundedRect(vg_, x, y - units(0.9f), width, units(1.8f), units(0.35f));
+                nvgFillColor(vg_, overlay(2.4f * fade));
+                nvgFill(vg_);
+                nvgFillColor(vg_, foreground(0.85f * fade));
+                nvgText(vg_, x + units(0.7f), y, genre.c_str(), nullptr);
+                x += width + units(0.5f);
+            }
+            y += units(3.0f);
+        }
         nvgFontFace(vg_, "regular");
         nvgFontSize(vg_, units(1.0f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
         nvgFillColor(vg_, foreground(0.65f * fade));
-        y += wrapped_text(vg_, kPaneLeft + units(0.4f), y, kPaneWidth - units(0.8f), units(1.5f), 9,
-                          drawable(item.description));
+        y += wrapped_text(vg_, text_x, y, text_width, units(1.6f), 9, drawable(item.description));
         if (item.in_library)
         {
             nvgFontFace(vg_, "medium");
