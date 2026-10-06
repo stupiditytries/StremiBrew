@@ -287,6 +287,7 @@ class App
     float swap_held_ = 0;      // seconds spent waiting for the new rows
     float content_veil_ = 0;   // 0..1: the black over everything but the bars
     bool focus_rows_when_ready_ = false;
+    float wheel_turn_ = 0, wheel_alpha_ = 0; // the wheel shown while a search is on its way
     // The on-screen keyboard under the search bar, and the key the focus is on.
     bool keyboard_open_ = false;
     int key_row_ = 1, key_column_ = 0;

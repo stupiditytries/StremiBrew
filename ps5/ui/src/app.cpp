@@ -710,15 +710,27 @@ void App::apply(Button button)
         }
         else if (button == Button::Right && column + 1 < rows_[row_focus_].items.size())
             ++column;
-        else if (button == Button::Up)
+        else if (button == Button::Up || (button == Button::Down && row_focus_ + 1 < rows_.size()))
         {
-            if (row_focus_ > 0)
-                --row_focus_;
-            else
+            if (button == Button::Up && row_focus_ == 0)
+            {
                 zone_ = Zone::Search;
+                break;
+            }
+            const std::size_t from = row_focus_;
+            row_focus_ = button == Button::Up ? row_focus_ - 1 : row_focus_ + 1;
+            if (shown_view_ == View::Search && !rows_[row_focus_].items.empty())
+            {
+                // In what a search found, up and down go to the card directly above or
+                // below, wherever that row's focus was before.
+                const float centre = (static_cast<float>(column) + 0.5f) * card_width(rows_[from]) -
+                                     scroll_x_target_[from];
+                const float width = card_width(rows_[row_focus_]);
+                const float place = (centre + scroll_x_target_[row_focus_]) / width;
+                column_focus_[row_focus_] = static_cast<std::size_t>(std::clamp(
+                    place, 0.0f, static_cast<float>(rows_[row_focus_].items.size() - 1)));
+            }
         }
-        else if (button == Button::Down && row_focus_ + 1 < rows_.size())
-            ++row_focus_;
         else if (button == Button::Accept)
         {
             if (const BoardItem *item = focused_item())
@@ -766,14 +778,29 @@ void App::update(float seconds)
     else if (swap_holding_)
     {
         swap_held_ += seconds;
-        bool ready = false;
+        // Ready is every row answered and the posters that will be on screen loaded, so
+        // that nothing arrives after the screen has come back.
+        bool ready = !rows_.empty();
+        std::size_t shown = 0;
         for (const BoardRow &row : rows_)
-            ready = ready || !row.items.empty();
-        if ((ready && swap_held_ > 0.1f) || swap_held_ > 6.0f)
+        {
+            ready = ready && !row.loading && !row.items.empty();
+            if (shown++ >= 2)
+                continue;
+            for (std::size_t column = 0; column < row.items.size() && column < 9; ++column)
+                if (images_->get(row.items[column].poster, kPosterPixels).state == Images::State::Pending)
+                    ready = false;
+        }
+        // Nothing at all after a while is a search that found nothing; rows that are
+        // there but slow are shown as they are in the end.
+        if ((ready && swap_held_ > 0.15f) || swap_held_ > (rows_.empty() ? 7.0f : 10.0f))
             swap_holding_ = false;
     }
     else
         content_veil_ = std::max(0.0f, content_veil_ - seconds / 0.3f);
+    wheel_turn_ += seconds;
+    wheel_alpha_ = swap_holding_ ? std::min(1.0f, wheel_alpha_ + seconds / 0.25f)
+                                 : std::max(0.0f, wheel_alpha_ - seconds / 0.15f);
     // A change of view (another tab, a search begun or ended) empties the rows: the ones
     // on screen belong to the view before, and the host's for this one are on their way.
     if (view() != shown_view_ || search_sent_ != shown_query_)
@@ -1461,7 +1488,24 @@ void App::draw(int width, int height)
         nvgFillColor(vg_, nvgRGBAf(0, 0, 0, content_veil_));
         nvgFill(vg_);
     }
-    if (rows_.empty() && shown_view_ != View::Board && !swap_pending_ &&
+    if (wheel_alpha_ > 0.0f)
+    {
+        // A wheel while a search is on its way.
+        const float x = kNavWidth + (kScreenWidth - kNavWidth) / 2, y = kScreenHeight / 2;
+        const float radius = units(1.6f), turn = wheel_turn_ * 5.5f;
+        nvgBeginPath(vg_);
+        nvgCircle(vg_, x, y, radius);
+        nvgStrokeColor(vg_, foreground(0.12f * wheel_alpha_));
+        nvgStrokeWidth(vg_, units(0.28f));
+        nvgStroke(vg_);
+        nvgBeginPath(vg_);
+        nvgArc(vg_, x, y, radius, turn, turn + 1.7f, NVG_CW);
+        nvgStrokeColor(vg_, accent(wheel_alpha_));
+        nvgLineCap(vg_, NVG_ROUND);
+        nvgStroke(vg_);
+        nvgLineCap(vg_, NVG_BUTT);
+    }
+    if (rows_.empty() && shown_view_ != View::Board && !swap_pending_ && !swap_holding_ &&
         (shown_view_ == View::Search || kTabs[selected_tab_].icon == Icon::Library))
     {
         // Nothing to show (yet): say why.
@@ -1472,8 +1516,7 @@ void App::draw(int width, int height)
         const std::string text =
             shown_view_ != View::Search
                 ? std::string{"Nothing in your library yet. Press OPTIONS on a title to add it."}
-                : (swap_holding_ ? "Searching for \xE2\x80\x9C" : "Nothing found for \xE2\x80\x9C") + shown_query_ +
-                      "\xE2\x80\x9D";
+                : "Nothing found for \xE2\x80\x9C" + shown_query_ + "\xE2\x80\x9D";
         nvgText(vg_, kNavWidth + kContentInset + kCardPadding, rows_top() + units(0.6f), text.c_str(), nullptr);
     }
     draw_top_bar();
