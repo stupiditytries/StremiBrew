@@ -112,6 +112,11 @@ void TrailerControl::frame()
             if (answered)
                 url = shared_->url;
         }
+        // A trailer left behind takes a moment to close and holds its threads until it
+        // has; the next one waits for that, or moving quickly along a row would pile
+        // them up until the console has no threads left to give.
+        if (answered && !url.empty() && Player::sessions() > 1)
+            answered = false;
         if (answered)
         {
             if (url.empty())

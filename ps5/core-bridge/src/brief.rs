@@ -54,8 +54,30 @@ fn fetch(kind: &str, id: &str) -> Option<Brief> {
     })
 }
 
-/// What is known about a title. The first call for a title starts fetching it and returns
-/// nothing; the board is announced as changed when the answer is in.
+/// Titles waiting to be looked up, and whether the thread that does it has been started.
+static WAITING: Lazy<Mutex<(Vec<(String, String)>, bool)>> = Lazy::new(Default::default);
+
+/// Looks the waiting titles up one after another. One thread does this for as long as
+/// the app runs: a library can hold hundreds of titles, and a thread for each (as there
+/// once was) runs the console out of threads.
+fn work() {
+    loop {
+        let next = WAITING.lock().ok().and_then(|mut waiting| waiting.0.pop());
+        let Some((kind, id)) = next else {
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        };
+        if let Some(brief) = fetch(&kind, &id) {
+            if let Ok(mut briefs) = BRIEFS.lock() {
+                briefs.insert(id, Some(brief));
+            }
+            crate::announce("{\"event\":\"brief\",\"fields\":[\"board\"]}");
+        }
+    }
+}
+
+/// What is known about a title. The first call for a title queues it to be fetched and
+/// returns nothing; the board is announced as changed when the answer is in.
 pub fn get(kind: &str, id: &str) -> Option<Brief> {
     let mut briefs = BRIEFS.lock().ok()?;
     if let Some(known) = briefs.get(id) {
@@ -64,15 +86,16 @@ pub fn get(kind: &str, id: &str) -> Option<Brief> {
     briefs.insert(id.to_owned(), None);
     drop(briefs);
     if id.starts_with("tt") {
-        let (kind, id) = (kind.to_owned(), id.to_owned());
-        std::thread::spawn(move || {
-            if let Some(brief) = fetch(&kind, &id) {
-                if let Ok(mut briefs) = BRIEFS.lock() {
-                    briefs.insert(id, Some(brief));
-                }
-                crate::announce("{\"event\":\"brief\",\"fields\":[\"board\"]}");
+        if let Ok(mut waiting) = WAITING.lock() {
+            waiting.0.push((kind.to_owned(), id.to_owned()));
+            if !waiting.1 {
+                // Should the thread not start, the titles simply go without these facts.
+                waiting.1 = std::thread::Builder::new()
+                    .name("briefs".to_owned())
+                    .spawn(work)
+                    .is_ok();
             }
-        });
+        }
     }
     None
 }

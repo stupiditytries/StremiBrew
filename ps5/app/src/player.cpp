@@ -1476,6 +1476,16 @@ struct Player::Session
     }
 };
 
+namespace
+{
+std::atomic<int> live_sessions{0};
+}
+
+int Player::sessions()
+{
+    return live_sessions;
+}
+
 Player::Player() = default;
 
 Player::~Player()
@@ -1504,6 +1514,7 @@ void Player::open(const std::string &url, double start, const std::string &audio
     has_picture_ = false;
     shown_serial_ = -1;
     skipped_ = 0;
+    ++live_sessions;
     Session *session = session_.get();
     session->reader = std::thread{[session] { session->run_reader(); }};
 }
@@ -1524,6 +1535,7 @@ void Player::close()
     std::thread{[session] {
         if (session->reader.joinable())
             session->reader.join();
+        --live_sessions;
     }}.detach();
 }
 

@@ -67,6 +67,9 @@ class Player
     {
         return session_ != nullptr;
     }
+    // How many videos, across all players, are open or closed but still winding down
+    // (each holds a dozen threads until its network reads return).
+    static int sessions();
     void set_paused(bool paused);
     void seek(double seconds);
     ui::Playback status() const;

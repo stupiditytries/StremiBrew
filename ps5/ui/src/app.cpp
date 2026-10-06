@@ -834,7 +834,7 @@ void App::update(float seconds)
     // the rest of the dwell covers); after the dwell it plays; when the focus moves on, or
     // anything else takes the screen, it stops.
     {
-        constexpr float kPrepareAfter = 0.4f, kPlayAfter = 2.0f;
+        constexpr float kPrepareAfter = 0.7f, kPlayAfter = 2.0f;
         const bool browsing = trailers_ && !title_open_ && !veil_rising_ && !player_open_ &&
                               zone_ == Zone::Rows && kTabs[selected_tab_].icon == Icon::Board;
         const std::string wanted = browsing && item != nullptr ? item->id : std::string{};

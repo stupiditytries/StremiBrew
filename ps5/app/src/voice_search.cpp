@@ -61,12 +61,14 @@ Microphone &microphone()
         return found;
     }
     void *open = nullptr, *input = nullptr, *close = nullptr;
-    sceKernelDlsym(handle, "sceAudioInOpen", &open);
-    sceKernelDlsym(handle, "sceAudioInInput", &input);
-    sceKernelDlsym(handle, "sceAudioInClose", &close);
+    const int opened = sceKernelDlsym(handle, "sceAudioInOpen", &open);
+    const int read = sceKernelDlsym(handle, "sceAudioInInput", &input);
+    const int closed = sceKernelDlsym(handle, "sceAudioInClose", &close);
     if (open == nullptr || input == nullptr || close == nullptr)
     {
-        log_line("voice: the microphone library's functions were not found");
+        log_line("voice: the microphone library loaded (handle %d) but its functions were not found "
+                 "(open 0x%x, input 0x%x, close 0x%x)",
+                 handle, opened, read, closed);
         return found;
     }
     found.open = reinterpret_cast<OpenFunction>(open);
@@ -111,7 +113,9 @@ struct VoiceSearch::Shared
 VoiceSearch::VoiceSearch(ui::App &app, std::function<std::string()> model)
     : app_{app}, model_{std::move(model)}, shared_{std::make_shared<Shared>()}
 {
-    app_.set_voice_handler([this] { start(); });
+    // Offered only when the console lets the app use the microphone.
+    if (microphone().open != nullptr)
+        app_.set_voice_handler([this] { start(); });
 }
 
 void VoiceSearch::start()
