@@ -2,6 +2,7 @@
 //! context, the board and a title's details, and grows a field per screen as screens are
 //! built.
 
+use stremio_core::models::calendar::Calendar;
 use stremio_core::models::catalogs_with_extra::CatalogsWithExtra;
 use stremio_core::models::continue_watching_preview::ContinueWatchingPreview;
 use stremio_core::models::player::Player;
@@ -35,6 +36,8 @@ pub struct Ps5Model {
     pub player: Player,
     /// The titles part-way through, for the board's first row.
     pub continue_watching: ContinueWatchingPreview,
+    /// What the library's series release on each day of a month.
+    pub calendar: Calendar,
 }
 
 impl Ps5Model {
@@ -64,6 +67,7 @@ impl Ps5Model {
             meta_details: MetaDetails::default(),
             player: Player::default(),
             continue_watching,
+            calendar: Calendar::default(),
         };
         (model, Effects::none().unchanged())
     }

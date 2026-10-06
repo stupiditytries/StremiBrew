@@ -23,6 +23,7 @@
 #include "account_data.hpp"
 #include "board_data.hpp"
 #include "details_data.hpp"
+#include "pages_data.hpp"
 
 void log_line(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -48,6 +49,12 @@ class CoreLink
     }
     // Which rows the screen wants: 0 the board, 1 a search (for `query`), 2 the library.
     void set_view(int view, const std::string &query);
+    // Which other screen is on show and so kept fresh: 0 none, 1 the calendar, 2 the
+    // add-ons.
+    void set_page(int page)
+    {
+        page_.store(page, std::memory_order_relaxed);
+    }
 
     // Each returns true, and moves the value out, when something newer than the last one
     // taken has arrived.
@@ -55,6 +62,8 @@ class CoreLink
     bool take_board(std::vector<ui::BoardRow> &rows, int &view, std::string &query);
     bool take_details(ui::Details &details);
     bool take_account(ui::Account &account);
+    bool take_calendar(ui::CalendarMonth &month);
+    bool take_addons(std::vector<ui::Addon> &addons);
 
   private:
     void run();
@@ -71,6 +80,9 @@ class CoreLink
     std::string query_;
     std::optional<ui::Details> details_;
     std::optional<ui::Account> account_;
+    std::optional<ui::CalendarMonth> calendar_;
+    std::optional<std::vector<ui::Addon>> addons_;
+    std::atomic<int> page_{0};
     std::atomic<std::size_t> focused_catalog_{0};
     std::atomic<bool> title_open_{false};
 };

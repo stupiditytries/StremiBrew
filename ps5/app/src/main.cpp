@@ -30,10 +30,10 @@
 #include "board_data.hpp"
 #include "core_link.hpp"
 #include "details_data.hpp"
+#include "keyboard.hpp"
 #include "pad.hpp"
 #include "play_control.hpp"
 #include "trailer_control.hpp"
-#include "voice_search.hpp"
 #include "sounds.hpp"
 #include "theme.hpp"
 
@@ -60,6 +60,7 @@ extern "C"
     void stremio_http_set_cache(const char *path, std::uint32_t megabytes);
     std::int32_t stremio_core_library_set(const char *id, bool add);
     void stremio_core_forget_progress(const char *id);
+    void stremio_core_calendar_load(std::int32_t year, std::uint32_t month);
     std::int32_t stremio_http_download(const char *url, const char *path, std::uint64_t *done,
                                        std::uint64_t *total);
     void app_heap_stats(std::size_t *in_use, std::size_t *peak, std::size_t *mapped);
@@ -460,12 +461,12 @@ int main()
                 stremio_core_library_set(id.c_str(), action == ui::LibraryAction::Add);
         });
     });
-    // Voice search hears through the controller's microphone and uses the same speech
-    // model as subtitle calibration.
-    static ps5::VoiceSearch voice{app, [model_file] {
-                                      return speech.ready[speech.chosen] ? model_file(speech.chosen)
-                                                                         : std::string{};
-                                  }};
+    // Searches are typed on the console's own keyboard (which also takes dictation).
+    static ps5::Keyboard keyboard;
+    app.set_keyboard_handler([](const std::string &text) { return keyboard.open(text); });
+    app.set_calendar_handler([&core](int year, int month) {
+        core.post([year, month] { stremio_core_calendar_load(year, static_cast<std::uint32_t>(month)); });
+    });
     playing.set_calibration_sources(
         [model_file] { return speech.ready[speech.chosen] ? model_file(speech.chosen) : std::string{}; },
         [&app] { return app.subtitle_style().calibration_offset; });
@@ -519,7 +520,13 @@ int main()
         if (core.take_board(rows, rows_view, rows_query) && rows_view == static_cast<int>(app.view()) &&
             rows_query == app.search_query())
             app.set_board(std::move(rows));
-        voice.frame();
+        core.set_page(static_cast<int>(app.page()));
+        ui::CalendarMonth month;
+        if (core.take_calendar(month))
+            app.set_calendar(std::move(month));
+        std::vector<ui::Addon> addons;
+        if (core.take_addons(addons))
+            app.set_addons(std::move(addons));
         ui::Details details;
         if (core.take_details(details))
             app.set_details(std::move(details));
@@ -532,7 +539,22 @@ int main()
         const double now = seconds_now();
         const float elapsed = static_cast<float>(now - previous);
         previous = now;
-        pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
+        // While the console's keyboard is up the controller is its; the presses that
+        // close it are not also the app's.
+        static float keyboard_closed_for = 1.0f;
+        if (keyboard.active())
+        {
+            keyboard_closed_for = 0;
+            std::string typed;
+            if (keyboard.poll(typed) == ps5::Keyboard::Result::Done)
+                app.submit_search(typed);
+        }
+        else
+            keyboard_closed_for += elapsed;
+        if (keyboard_closed_for < 0.3f)
+            pad.poll(elapsed, [](ui::Button) {});
+        else
+            pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
         app.set_calibrate_hold(pad.hold_progress());
         if (download != nullptr)
         {

@@ -8,6 +8,7 @@ mod brief;
 mod details;
 mod env;
 mod model;
+mod pages;
 mod playback;
 mod stream_io;
 mod subtitles;
@@ -343,7 +344,7 @@ struct BoardRow<'a> {
     /// requested from the core by this number.
     index: usize,
     id: &'a str,
-    name: &'a str,
+    name: std::borrow::Cow<'a, str>,
     r#type: &'a str,
     addon: &'a str,
     /// "ready", "loading" or "error".
@@ -384,6 +385,17 @@ fn sharper_poster(url: &str) -> std::borrow::Cow<'_, str> {
         url.replace(SMALL, "images.metahub.space/poster/medium/").into()
     } else {
         url.into()
+    }
+}
+
+/// A kind of title as a row's heading.
+fn kind_name(kind: &str) -> &str {
+    match kind {
+        "movie" => "Movies",
+        "series" => "Series",
+        "channel" => "Channels",
+        "tv" => "TV",
+        other => other,
     }
 }
 
@@ -510,13 +522,7 @@ pub extern "C" fn stremio_core_rows(
             rows.push(BoardRow {
                 index: 0,
                 id: kind,
-                name: match kind {
-                    "movie" => "Movies",
-                    "series" => "Series",
-                    "channel" => "Channels",
-                    "tv" => "TV",
-                    other => other,
-                },
+                name: kind_name(kind).into(),
                 r#type: "",
                 addon: "",
                 state: "ready",
@@ -535,7 +541,7 @@ pub extern "C" fn stremio_core_rows(
         rows.push(BoardRow {
             index: 0,
             id: "continue_watching",
-            name: "Continue watching",
+            name: "Continue watching".into(),
             r#type: "",
             addon: "",
             state: "ready",
@@ -607,11 +613,26 @@ pub extern "C" fn stremio_core_rows(
                 Some(Loadable::Err(error)) => ("error", Some(format!("{error:?}")), vec![]),
                 Some(Loadable::Loading) | None => ("loading", None, vec![]),
             };
+            // What a search found is titled by its kind alone ("Movies"), with the add-on's
+            // name when it is not Stremio's own catalogue; a board row by its catalog.
+            let (name, kind): (std::borrow::Cow<str>, &str) = if view == 1 {
+                let kind = kind_name(&catalog.r#type);
+                if addon.manifest.id == "com.linvo.cinemeta" {
+                    (kind.into(), "")
+                } else {
+                    (format!("{kind} - {}", addon.manifest.name).into(), "")
+                }
+            } else {
+                (
+                    catalog.name.as_deref().unwrap_or(&addon.manifest.name).into(),
+                    catalog.r#type.as_str(),
+                )
+            };
             Some(BoardRow {
                 index,
                 id: &catalog.id,
-                name: catalog.name.as_deref().unwrap_or(&addon.manifest.name),
-                r#type: &catalog.r#type,
+                name,
+                r#type: kind,
                 addon: &addon.manifest.name,
                 state,
                 error,
@@ -901,6 +922,39 @@ pub extern "C" fn stremio_core_library_sync() {
             field: Some(Ps5ModelField::Ctx),
             action: Action::Ctx(stremio_core::runtime::msg::ActionCtx::SyncLibraryWithAPI),
         });
+    }
+}
+
+/// Shows a month in the calendar (see `pages::load_calendar`); `year` 0 is the present one.
+#[no_mangle]
+pub extern "C" fn stremio_core_calendar_load(year: i32, month: u32) {
+    if let Some(runtime) = RUNTIME.get() {
+        pages::load_calendar(runtime, year, month);
+    }
+}
+
+/// Serialises the calendar's month for the UI as JSON (see `pages::Calendar`). Returns the
+/// JSON's length, or 0 when no month is loaded or on failure.
+#[no_mangle]
+pub extern "C" fn stremio_core_calendar(out: *mut c_char, capacity: usize) -> usize {
+    let Some(Ok(model)) = RUNTIME.get().map(|runtime| runtime.model()) else {
+        return 0;
+    };
+    match pages::calendar(&model).map(|calendar| serde_json::to_string(&calendar)) {
+        Some(Ok(json)) => copy_out(&json, out, capacity),
+        _ => 0,
+    }
+}
+
+/// Serialises the installed add-ons for the UI as a JSON list (see `pages::Addon`).
+#[no_mangle]
+pub extern "C" fn stremio_core_addons(out: *mut c_char, capacity: usize) -> usize {
+    let Some(Ok(model)) = RUNTIME.get().map(|runtime| runtime.model()) else {
+        return 0;
+    };
+    match serde_json::to_string(&pages::addons(&model)) {
+        Ok(json) => copy_out(&json, out, capacity),
+        Err(_) => 0,
     }
 }
 

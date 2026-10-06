@@ -159,8 +159,11 @@ bool button_for(char letter, ui::Button &button)
     case 'o':
         button = ui::Button::Options;
         return true;
-    case 'v':
-        button = ui::Button::Voice;
+    case 'p':
+        button = ui::Button::SkipBack;
+        return true;
+    case 'n':
+        button = ui::Button::SkipForward;
         return true;
     case 'a':
         button = ui::Button::Accept;
@@ -330,8 +333,66 @@ int main(int argc, char **argv)
         instance.set_library_handler([](ui::LibraryAction action, const ui::BoardItem &item) {
             std::printf("library action %d on %s\n", static_cast<int>(action), item.name.c_str());
         });
-        instance.set_voice_handler([&instance] {
-            instance.set_voice(ui::VoicePhase::Listening, "Listening\xE2\x80\xA6");
+        // The console's keyboard is stood in for by one that has already typed something.
+        instance.set_keyboard_handler([&instance](const std::string &) {
+            instance.submit_search("breaking bad");
+            return true;
+        });
+        // A sample month for the calendar, with the board's posters, and sample add-ons.
+        static ui::CalendarMonth month;
+        const auto fill_month = [](int year, int number) {
+            static const int kLengths[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+            month = ui::CalendarMonth{};
+            month.year = year;
+            month.month = number;
+            month.days = kLengths[number - 1];
+            month.first_weekday = (number * 3 + year) % 7;
+            month.today = number == 10 ? 7 : 0;
+            std::vector<ui::BoardRow> rows;
+            ui::parse_board(board_json, rows);
+            std::vector<ui::BoardItem> series;
+            for (const ui::BoardRow &row : rows)
+                for (const ui::BoardItem &item : row.items)
+                    if (item.type == "series")
+                        series.push_back(item);
+            std::size_t next = static_cast<std::size_t>(number);
+            for (const int day : {2, 5, 7, 8, 12, 13, 16, 21, 22, 27, 30})
+            {
+                ui::CalendarDay entry;
+                entry.day = day;
+                const int count = day == 7 ? 5 : day % 3 == 0 ? 2 : 1;
+                for (int index = 0; index < count && !series.empty(); ++index, ++next)
+                {
+                    const ui::BoardItem &item = series[next % series.size()];
+                    entry.items.push_back({item.id, item.type, item.name, item.poster, item.id + ":2:" + std::to_string(day),
+                                           "Episode", 2, day % 10 + 1});
+                }
+                month.items.push_back(std::move(entry));
+            }
+        };
+        fill_month(2026, 10);
+        instance.set_calendar(month);
+        instance.set_calendar_handler([&instance, fill_month](int year, int number) {
+            if (year != 0)
+                fill_month(year, number);
+            instance.set_calendar(month);
+        });
+        instance.set_addons({
+            {"Cinemeta", "3.0.13", "The official addon for movie and series catalogs", "", "v3-cinemeta.strem.io",
+             {"movie", "series"}, {"catalog", "meta", "addon_catalog"}, true},
+            {"OpenSubtitles v3", "1.0.0", "OpenSubtitles v3 Addon for Stremio", "", "opensubtitles-v3.strem.io",
+             {"movie", "series"}, {"subtitles"}, true},
+            {"Torrentio", "0.0.15", "Provides torrent streams from scraped torrent providers. Currently supports "
+             "YTS, EZTV, RARBG, 1337x, ThePirateBay and others.", "", "torrentio.strem.fun",
+             {"movie", "series", "anime"}, {"stream"}, false},
+            {"Local Files", "1.10.0", "Local add-on to find playable files on this device", "", "127.0.0.1",
+             {"movie", "series", "other"}, {"catalog", "meta", "stream"}, true},
+            {"WatchHub", "0.0.4", "Find where to stream your favourite movies and shows amongst Netflix, HBO, "
+             "Hulu and more", "", "watchhub.strem.io", {"movie", "series"}, {"stream"}, true},
+            {"Public Domain Movies", "0.0.1", "Movies in the public domain", "", "caching.stremio.net",
+             {"movie"}, {"catalog", "stream"}, false},
+            {"YouTube", "1.4.2", "Watch your favourite YouTube channels ad-free", "", "v3-channels.strem.io",
+             {"channel"}, {"catalog", "meta", "stream"}, true},
         });
         instance.set_languages_handler([](const std::string &audio, const std::string &subtitles) {
             std::printf("languages: %s / %s\n", audio.c_str(), subtitles.c_str());
@@ -412,8 +473,13 @@ int main(int argc, char **argv)
                     instance.update(0.0f);
                     std::vector<ui::BoardRow> again;
                     ui::parse_board(board_json, again);
-                    if (served == ui::View::Search && !again.empty())
+                    if (served == ui::View::Search && again.size() > 2)
+                    {
                         again.erase(again.begin());
+                        again.resize(2);
+                        again[0].title = "Movies";
+                        again[1].title = "Series";
+                    }
                     instance.set_board(std::move(again));
                 }
             }
@@ -436,7 +502,9 @@ int main(int argc, char **argv)
             for (const char letter : keys)
             {
                 ui::Button button;
-                if (letter == 's')
+                if (letter == 'S')
+                    account.link = ui::Account::Link::Waiting; // signed in without the steps
+                if (letter == 's' || letter == 'S')
                     complete_sign_in();
                 else if (button_for(letter, button))
                     instance.press(button);

@@ -48,7 +48,10 @@ add_library(stremio_ui STATIC
     src/draw_util.cpp
     src/icons.cpp
     src/images.cpp
+    src/pages_data.cpp
+    src/pages_screen.cpp
     src/player_screen.cpp
+    src/settings_screen.cpp
     "${third_party}/nanovg/nanovg.c")
 target_include_directories(stremio_ui PUBLIC src "${third_party}/nanovg" "${third_party}")
 target_link_libraries(stremio_ui PUBLIC webpdecode)

@@ -26,9 +26,4 @@ struct CalibrationResult
 // Takes seconds; call it off the drawing thread.
 CalibrationResult calibrate(const std::string &model, const std::vector<float> &samples, double start,
                             const std::vector<Cue> &cues, const std::string &language);
-// What was said in `samples` (mono, 16,000 samples a second), as plain text; empty when
-// nothing was, or the model could not be loaded. `language` as for calibrate. Takes a
-// second or two; call it off the drawing thread.
-std::string transcribe(const std::string &model, const std::vector<float> &samples,
-                       const std::string &language);
 } // namespace ps5

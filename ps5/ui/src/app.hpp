@@ -12,6 +12,7 @@
 #include "account_data.hpp"
 #include "board_data.hpp"
 #include "details_data.hpp"
+#include "pages_data.hpp"
 #include "player_screen.hpp"
 #include "speech_models.hpp"
 
@@ -35,7 +36,6 @@ enum class Button
     SkipForward, // R1: forward 15 seconds
     Calibrate,   // triangle held: in the player, time the subtitles to the dialogue
     Options,     // the options button: what can be done with the focused title
-    Voice,       // square: search by saying what to search for
 };
 
 // Which set of rows the screen is showing, and so which the host should supply.
@@ -46,21 +46,20 @@ enum class View
     Library, // the account's library
 };
 
+// A screen whose contents the host supplies besides the rows.
+enum class Page
+{
+    None,
+    Calendar,
+    Addons,
+};
+
 // What the options menu can ask the host to do with a title.
 enum class LibraryAction
 {
     Add,    // put it in the library
     Remove, // take it out
     Forget, // take it out of "Continue watching"
-};
-
-// How a voice search is going, for the search bar to say.
-enum class VoicePhase
-{
-    Idle,
-    Listening,
-    Working,
-    Failed,
 };
 
 // Sound effects the host plays as the user gets about.
@@ -120,13 +119,20 @@ class App
     {
         return search_sent_;
     }
-    // Replaces the words being searched for (a voice search's result).
-    void set_search_query(const std::string &text);
+    // Searches for `text`; empty text ends the search and goes back to what was there.
+    void submit_search(const std::string &text);
+    // The console's own keyboard. Asked to open with the words so far, it answers whether
+    // it did; what is typed on it comes back through submit_search. Without one, or when
+    // it does not open, the app's own keyboard is used.
+    void set_keyboard_handler(std::function<bool(const std::string &text)> open);
     void set_library_handler(std::function<void(LibraryAction, const BoardItem &)> handler);
-    // Voice search: what starts one (not set when there is no way to hear), and how the
-    // one in progress is going.
-    void set_voice_handler(std::function<void()> start);
-    void set_voice(VoicePhase phase, const std::string &message);
+    // The Calendar and Addons screens. The host supplies the one on show (see page): the
+    // calendar's month, which the handler asks for (year 0 for the present one), and the
+    // installed add-ons.
+    Page page() const;
+    void set_calendar_handler(std::function<void(int year, int month)> handler);
+    void set_calendar(CalendarMonth month);
+    void set_addons(std::vector<Addon> addons);
     // How images that are not in the cache folder yet are downloaded (see Images).
     void set_image_fetcher(
         std::function<void(const std::string &address, const std::string &file)> fetch,
@@ -206,7 +212,7 @@ class App
         Navigation,
         Search,
         Rows,
-        Content, // the one button of a screen that is not the board
+        Content, // a screen that is not rows: the calendar, the add-ons, the settings
     };
 
     void draw_navigation();
@@ -221,6 +227,14 @@ class App
     float row_top(std::size_t index) const;
     void follow_focus();
     void enter_tab();
+    void leave_content();
+    void open_title(const BoardItem &item);
+    float rows_top() const;
+    void press_calendar(Button button);
+    void draw_calendar();
+    const CalendarDay *calendar_day(int day) const;
+    void press_addons(Button button);
+    void draw_addons();
     void apply(Button button);
     bool press_keyboard(Button button);
     bool press_menu(Button button);
@@ -233,6 +247,13 @@ class App
     // A number that changes whenever a press moves the focus or changes the screen.
     std::size_t focus_mark() const;
     void draw_settings();
+    void press_settings(Button button);
+    void change_setting(int section, int row, int step);
+    void press_setting(int section, int row);
+    std::string setting_value(int section, int row) const;
+    void draw_setting(int section, int row, float x, float y, float width, bool focused);
+    void draw_account(float left, float top, float width);
+    void draw_subtitle_sample(float left, float top, float width, float height);
     void draw_unbuilt_tab();
 
     NVGcontext *vg_;
@@ -256,14 +277,16 @@ class App
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
     std::function<void(LibraryAction, const BoardItem &)> library_handler_;
-    std::function<void()> voice_handler_;
-    VoicePhase voice_phase_ = VoicePhase::Idle;
-    std::string voice_message_;
-    float voice_shown_ = 0; // seconds a failure has been on show
-    // Search: the words as typed so far, and as last sent to be searched for (typing is
-    // followed at a short remove, so every letter is not a search of its own).
+    std::function<bool(const std::string &)> keyboard_handler_;
+    // Search: the words in the search bar, and the ones searched for. Going from one set
+    // of results to another (or to none) fades the screen out, swaps, and fades it in once
+    // there is something to show.
     std::string search_text_, search_sent_;
-    float search_wait_ = 0;
+    std::string swap_query_;
+    bool swap_pending_ = false, swap_holding_ = false;
+    float swap_held_ = 0;      // seconds spent waiting for the new rows
+    float content_veil_ = 0;   // 0..1: the black over everything but the bars
+    bool focus_rows_when_ready_ = false;
     // The on-screen keyboard under the search bar, and the key the focus is on.
     bool keyboard_open_ = false;
     int key_row_ = 1, key_column_ = 0;
@@ -277,10 +300,19 @@ class App
     int menu_focus_ = 0;
     float menu_x_ = 0, menu_y_ = 0;
     std::function<void(const std::string &, const std::string &)> languages_;
-    // Settings, in the order the focus goes through them: the account button (0), the
-    // two language rows (1, 2), trailers (3), the four subtitle style rows (4 to 7), and
-    // auto-calibrate's model, download and offset (8 to 10).
-    int content_focus_ = 0;
+    // Settings (see settings_screen.cpp): the section and the setting within it that
+    // the focus is on, and how far the list is scrolled.
+    int settings_section_ = 0, settings_row_ = 0;
+    float settings_scroll_ = 0, settings_scroll_target_ = 0;
+    // The calendar (see pages_screen.cpp): the month, the day chosen, where the focus is
+    // (0 the month's name, 1 the days, 2 the chosen day's episodes) and on which episode.
+    CalendarMonth calendar_;
+    std::function<void(int, int)> calendar_handler_;
+    int calendar_day_ = 1, calendar_area_ = 1, calendar_entry_ = 0;
+    float calendar_scroll_ = 0;
+    std::vector<Addon> addons_;
+    int addons_focus_ = 0;
+    float addons_scroll_ = 0, addons_scroll_target_ = 0;
     SpeechModels speech_;
     // Trailers: the switch; the title whose trailer is being got ready or played and how
     // long the focus has rested on it; and how visible the trailer is over the artwork.

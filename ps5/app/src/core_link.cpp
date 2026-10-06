@@ -17,6 +17,8 @@ extern "C"
     void stremio_core_account_advance(void);
     std::size_t stremio_core_account(char *out, std::size_t capacity);
     std::size_t stremio_core_details(char *out, std::size_t capacity);
+    std::size_t stremio_core_calendar(char *out, std::size_t capacity);
+    std::size_t stremio_core_addons(char *out, std::size_t capacity);
 }
 
 namespace ps5
@@ -30,6 +32,9 @@ constexpr std::uint32_t kRowsAhead = 4;
 // one, each announcing itself), and the account is looked at this often at least.
 constexpr double kBoardInterval = 0.2;
 constexpr double kAccountInterval = 2.0;
+// The library is brought up to date with the account's this often (and whenever the
+// library's screen is opened), so what other devices add or watch turns up here.
+constexpr double kLibraryInterval = 300.0;
 
 double seconds_now()
 {
@@ -106,6 +111,26 @@ bool CoreLink::take_account(ui::Account &account)
     return true;
 }
 
+bool CoreLink::take_calendar(ui::CalendarMonth &month)
+{
+    const std::lock_guard<std::mutex> lock{mutex_};
+    if (!calendar_)
+        return false;
+    month = std::move(*calendar_);
+    calendar_.reset();
+    return true;
+}
+
+bool CoreLink::take_addons(std::vector<ui::Addon> &addons)
+{
+    const std::lock_guard<std::mutex> lock{mutex_};
+    if (!addons_)
+        return false;
+    addons = std::move(*addons_);
+    addons_.reset();
+    return true;
+}
+
 void CoreLink::run()
 {
     std::vector<char> text(8 << 20);
@@ -118,6 +143,9 @@ void CoreLink::run()
     bool title_was_open = false;
     int view = 0;
     std::string query;
+    int page = 0;
+    bool page_stale = false;
+    double library_synced = 0;
 
     for (;;)
     {
@@ -146,6 +174,7 @@ void CoreLink::run()
             }
         }
         const bool commanded = !commands.empty();
+        page_stale = page_stale || commanded;
         for (auto &command : commands)
             command();
 
@@ -163,6 +192,9 @@ void CoreLink::run()
                 board_stale = true;
             if (event.empty() || event.find("\"meta_details\"") != std::string_view::npos)
                 details_stale = true;
+            if (event.empty() || event.find("\"calendar\"") != std::string_view::npos ||
+                event.find("\"ctx\"") != std::string_view::npos)
+                page_stale = true;
         }
 
         const double now = seconds_now();
@@ -197,6 +229,46 @@ void CoreLink::run()
                 account_known = true;
                 const std::lock_guard<std::mutex> lock{mutex_};
                 account_ = std::move(latest);
+            }
+        }
+
+        if (now - library_synced > kLibraryInterval && account_known && known.signed_in)
+        {
+            library_synced = now;
+            stremio_core_library_sync();
+        }
+
+        // The calendar or the add-ons, while one of them is the screen on show.
+        const int page_now = page_.load(std::memory_order_relaxed);
+        if (page_now != page)
+        {
+            page = page_now;
+            page_stale = true;
+        }
+        if (page_stale && page != 0)
+        {
+            page_stale = false;
+            if (page == 1)
+            {
+                length = stremio_core_calendar(text.data(), text.size());
+                ui::CalendarMonth month;
+                if (length != 0 && length < text.size() &&
+                    ui::parse_calendar(std::string_view{text.data(), length}, month))
+                {
+                    const std::lock_guard<std::mutex> lock{mutex_};
+                    calendar_ = std::move(month);
+                }
+            }
+            else
+            {
+                length = stremio_core_addons(text.data(), text.size());
+                std::vector<ui::Addon> addons;
+                if (length != 0 && length < text.size() &&
+                    ui::parse_addons(std::string_view{text.data(), length}, addons))
+                {
+                    const std::lock_guard<std::mutex> lock{mutex_};
+                    addons_ = std::move(addons);
+                }
             }
         }
 
