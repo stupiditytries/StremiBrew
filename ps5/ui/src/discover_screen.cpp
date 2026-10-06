@@ -130,9 +130,14 @@ void App::press_discover(Button button)
             leave_content();
         else if (button == Button::Accept && !discover_choices(discover_pill_).empty())
         {
+            // The list opens with the present choice under the focus and in view.
+            const int total = static_cast<int>(discover_choices(discover_pill_).size());
             discover_list_open_ = true;
+            discover_list_pill_ = discover_pill_;
             discover_list_focus_ = selected_of(discover_choices(discover_pill_));
-            discover_list_scroll_ = static_cast<float>(std::max(0, discover_list_focus_ - kListRows / 2));
+            discover_list_cursor_ = static_cast<float>(discover_list_focus_);
+            discover_list_scroll_ = static_cast<float>(
+                std::clamp(discover_list_focus_ - kListRows / 2, 0, std::max(0, total - kListRows)));
         }
         return;
     }
@@ -190,6 +195,24 @@ void App::press_discover(Button button)
 void App::update_discover(float seconds)
 {
     discover_ignore_ = std::max(0.0f, discover_ignore_ - seconds);
+    {
+        // An open list: how far unrolled it is, where its highlight is on the way to the
+        // focused choice, and its scroll, which keeps that choice inside it.
+        discover_list_reveal_ = eased(discover_list_reveal_, discover_list_open_ ? 1.0f : 0.0f, seconds);
+        discover_list_cursor_ = eased(discover_list_cursor_, static_cast<float>(discover_list_focus_), seconds);
+        const int total = static_cast<int>(discover_choices(discover_list_pill_).size());
+        const int rows = std::min(total, kListRows);
+        float wanted = discover_list_scroll_;
+        if (static_cast<float>(discover_list_focus_) < wanted)
+            wanted = static_cast<float>(discover_list_focus_);
+        else if (static_cast<float>(discover_list_focus_) > wanted + static_cast<float>(rows - 1))
+            wanted = static_cast<float>(discover_list_focus_ - rows + 1);
+        wanted = std::clamp(std::round(wanted), 0.0f, static_cast<float>(std::max(0, total - rows)));
+        if (discover_list_open_)
+            discover_list_scroll_ = std::abs(discover_list_scroll_ - wanted) < 0.01f
+                                        ? wanted
+                                        : eased(discover_list_scroll_, wanted, seconds);
+    }
     const bool showing = page() == Page::Discover;
     if (!showing)
         return;
@@ -506,56 +529,66 @@ void App::draw_discover()
         // A chevron: there is more to choose from.
         const float tip_x = x + kPillWidth - units(1.5f), reach = units(0.3f);
         nvgBeginPath(vg_);
-        nvgMoveTo(vg_, tip_x - reach, middle - reach / 2);
-        nvgLineTo(vg_, tip_x, middle + reach / 2);
-        nvgLineTo(vg_, tip_x + reach, middle - reach / 2);
+        const float turned = (discover_list_pill_ == pill ? 1.0f - 2.0f * discover_list_reveal_ : 1.0f) * reach / 2;
+        nvgMoveTo(vg_, tip_x - reach, middle - turned);
+        nvgLineTo(vg_, tip_x, middle + turned);
+        nvgLineTo(vg_, tip_x + reach, middle - turned);
         nvgStrokeColor(vg_, foreground(0.7f));
         nvgStrokeWidth(vg_, units(0.12f));
         nvgStroke(vg_);
     }
-    if (discover_list_open_)
+    if (discover_list_reveal_ > 0.01f)
     {
-        const auto &choices = discover_choices(discover_pill_);
+        // The open pill's choices, in a panel that unrolls from under the pill (and rolls
+        // back up when it is closed). The highlight slides from choice to choice.
+        const auto &choices = discover_choices(discover_list_pill_);
         const int total = static_cast<int>(choices.size());
         const int rows = std::min(total, kListRows);
-        // The list scrolls to keep the focus inside it.
-        float wanted = discover_list_scroll_;
-        if (static_cast<float>(discover_list_focus_) < wanted)
-            wanted = static_cast<float>(discover_list_focus_);
-        else if (static_cast<float>(discover_list_focus_) > wanted + static_cast<float>(rows - 1))
-            wanted = static_cast<float>(discover_list_focus_ - rows + 1);
-        wanted = std::clamp(wanted, 0.0f, static_cast<float>(std::max(0, total - rows)));
-        discover_list_scroll_ = eased(discover_list_scroll_, wanted, frame_seconds_);
-        const float x = kLeft + kCardPadding + static_cast<float>(discover_pill_) * (kPillWidth + kPillGap);
-        const float y = kTop + kPillHeight + units(0.4f), pad = units(0.5f);
-        const float width = kPillWidth + units(4.0f), height = static_cast<float>(rows) * kListRow + 2 * pad;
+        const float reveal = discover_list_reveal_;
+        const float x = kLeft + kCardPadding + static_cast<float>(discover_list_pill_) * (kPillWidth + kPillGap);
+        const float y = kTop + kPillHeight + units(0.4f), pad = units(0.6f);
+        const float width = kPillWidth + units(4.0f);
+        const float full = static_cast<float>(rows) * kListRow + 2 * pad - units(0.2f);
+        const float height = full * reveal;
+        nvgSave(vg_);
+        nvgGlobalAlpha(vg_, reveal);
         nvgBeginPath(vg_);
         nvgRoundedRect(vg_, x, y, width, height, kRadius);
-        nvgFillColor(vg_, nvgRGBAf(0.09f, 0.09f, 0.11f, 0.98f));
+        nvgFillColor(vg_, nvgRGBf(0.09f, 0.09f, 0.11f));
         nvgFill(vg_);
-        nvgSave(vg_);
-        nvgScissor(vg_, x, y + pad, width, height - 2 * pad);
+        // Everything inside is cut to the panel as far as it has unrolled; the room
+        // around the choices is wide enough for the focus outline.
+        nvgScissor(vg_, x, y, width, height);
+        const float row_height = kListRow - units(0.2f);
+        const auto row_top = [&](float index) { return y + pad + (index - discover_list_scroll_) * kListRow; };
+        if (discover_list_open_)
+        {
+            const float top = row_top(discover_list_cursor_);
+            nvgBeginPath(vg_);
+            nvgRoundedRect(vg_, x + pad, top, width - 2 * pad, row_height, kRadius * 0.7f);
+            nvgFillColor(vg_, overlay(3.5f));
+            nvgFill(vg_);
+            focus_ring(vg_, x + pad, top, width - 2 * pad, row_height, kRadius * 0.7f);
+        }
         for (int index = 0; index < total; ++index)
         {
-            const float row = y + pad + (static_cast<float>(index) - discover_list_scroll_) * kListRow;
-            if (row + kListRow < y || row > y + height)
+            const float top = row_top(static_cast<float>(index));
+            if (top + kListRow < y || top > y + height)
                 continue;
             const Choice &choice = choices[static_cast<std::size_t>(index)];
-            const bool focused = index == discover_list_focus_;
-            if (focused)
-            {
-                nvgBeginPath(vg_);
-                nvgRoundedRect(vg_, x + pad, row, width - 2 * pad, kListRow - units(0.2f), kRadius * 0.7f);
-                nvgFillColor(vg_, overlay(3.5f));
-                nvgFill(vg_);
-                focus_ring(vg_, x + pad, row, width - 2 * pad, kListRow - units(0.2f), kRadius * 0.7f);
-            }
+            const bool focused = discover_list_open_ && index == discover_list_focus_;
+            // A choice scrolled part-way out past the panel's ends fades with how much of
+            // it is left, so nothing is sliced through.
+            const float inside = std::clamp(std::min(top + row_height - (y + pad * 0.5f), y + full - pad * 0.5f - top) /
+                                                row_height,
+                                            0.0f, 1.0f);
             nvgFontFace(vg_, choice.selected ? "semibold" : "medium");
             nvgFontSize(vg_, units(1.05f));
             nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-            nvgFillColor(vg_, choice.selected ? accent() : foreground(focused ? 1.0f : 0.8f));
-            fitted_text(vg_, x + pad + units(1.0f), row + (kListRow - units(0.2f)) / 2, width - 2 * pad - units(2.0f),
-                        choice.name);
+            NVGcolor colour = choice.selected ? accent() : foreground(focused ? 1.0f : 0.8f);
+            colour.a *= inside;
+            nvgFillColor(vg_, colour);
+            fitted_text(vg_, x + pad + units(1.0f), top + row_height / 2, width - 2 * pad - units(2.0f), choice.name);
         }
         nvgRestore(vg_);
     }

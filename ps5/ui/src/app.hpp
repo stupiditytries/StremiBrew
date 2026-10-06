@@ -333,6 +333,9 @@ class App
     bool discover_list_open_ = false;
     int discover_list_focus_ = 0;
     float discover_list_scroll_ = 0;
+    int discover_list_pill_ = 0;     // the pill whose list is open, or was last
+    float discover_list_reveal_ = 0; // 0..1: how far unrolled the list is
+    float discover_list_cursor_ = 0; // where its highlight is, in rows
     float discover_scroll_ = 0, discover_scroll_target_ = 0;
     bool discover_hold_ = true, discover_enter_grid_ = true;
     float discover_held_ = 0, discover_ignore_ = 0, discover_alpha_ = 0;
