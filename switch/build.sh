@@ -21,8 +21,14 @@ arch=(-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE)
 includes=(-I"$dkp/portlibs/switch/include" -I"$dkp/libnx/include" -I"$ui/src" -I"$ui/third_party/nanovg"
     -I"$ui/third_party" -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp")
 common=(-g -O2 -ffunction-sections -D__SWITCH__ "${arch[@]}" "${includes[@]}")
+# The core bridge (built by switch/rust/build.sh inside WSL), when it is there.
+core=()
+if [[ -f $out/libstremio_core.a ]]; then
+    common+=(-DWITH_CORE)
+    core=("$out/libstremio_core.a" "$out/libring_asm.a")
+fi
 
-sources=("$repo"/switch/src/*.cpp "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c")
+sources=("$repo"/switch/src/*.cpp "$repo"/switch/src/*.c "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c")
 while IFS= read -r file; do
     sources+=("$file")
 done < <(find "$ui/third_party/libwebp/src/dec" "$ui/third_party/libwebp/src/dsp" \
@@ -60,7 +66,7 @@ for source in "${sources[@]}"; do
 done
 
 aarch64-none-elf-g++ -specs="$dkp/libnx/switch.specs" -g "${arch[@]}" -Wl,-Map,"$out/StremiBrew.map" \
-    "${objects[@]}" -L"$dkp/portlibs/switch/lib" -L"$dkp/libnx/lib" \
+    "${objects[@]}" "${core[@]}" -L"$dkp/portlibs/switch/lib" -L"$dkp/libnx/lib" \
     -lglad -lEGL -lglapi -ldrm_nouveau -lnx -lm -o "$out/StremiBrew.elf"
 
 # The app's own files: the fonts, and for now the sample data the UI is shown with.

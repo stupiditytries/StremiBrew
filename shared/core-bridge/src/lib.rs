@@ -7,6 +7,8 @@ mod account;
 mod brief;
 mod details;
 mod env;
+#[cfg(target_os = "horizon")]
+mod horizon;
 mod model;
 mod pages;
 mod playback;

@@ -1,0 +1,12 @@
+[package]
+name = "layout-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Compile-time checks that the libc crate matches the Switch's C library"
+
+[dependencies]
+# The version Rust's standard library itself is built against.
+libc = "=0.2.190"
+
+[workspace]

@@ -22,6 +22,11 @@ once_cell = "1"
 # Blocking HTTPS client with a pure-Rust TLS stack and bundled root certificates.
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
+# The Switch: the `getrandom` crate does not know it, and is given the console's random
+# number generator (see src/horizon.rs).
+[target.'cfg(target_os = "horizon")'.dependencies]
+getrandom = { version = "0.2", features = ["custom"] }
+
 # Not a member of the core's workspace: it is built for the PS5 target on its own.
 [workspace]
 

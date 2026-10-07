@@ -5,10 +5,13 @@
 // What it has to say goes to sdmc:/switch/StremiBrew/log.txt.
 
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <sys/stat.h>
@@ -49,6 +52,50 @@ void log_line(const char *format, ...)
         std::fclose(log);
     }
 }
+
+#ifdef WITH_CORE
+extern "C"
+{
+std::int32_t stremio_core_init(const char *storage_dir);
+std::int32_t stremio_core_load_board(std::uint32_t rows);
+std::size_t stremio_core_poll_event(char *out, std::size_t capacity);
+std::size_t stremio_core_board_summary(char *out, std::size_t capacity);
+std::size_t stremio_core_last_error(char *out, std::size_t capacity);
+}
+
+// A first trial of the core on this console: start it, ask for the board over the
+// network, and write what came back to the log.
+static void try_core()
+{
+    mkdir("sdmc:/switch/StremiBrew/core", 0777);
+    const Result network = socketInitializeDefault();
+    log_line("core trial: network %s (0x%x)", R_SUCCEEDED(network) ? "ready" : "not available", network);
+    if (stremio_core_init("sdmc:/switch/StremiBrew/core") != 0)
+    {
+        char error[256] = {};
+        stremio_core_last_error(error, sizeof error);
+        log_line("core trial: the core did not start: %s", error);
+        return;
+    }
+    log_line("core trial: core started");
+    stremio_core_load_board(6);
+    static char text[1 << 16];
+    for (int second = 1; second <= 20; ++second)
+    {
+        svcSleepThread(1'000'000'000ull);
+        int events = 0;
+        while (stremio_core_poll_event(text, sizeof text) != 0)
+            ++events;
+        const std::size_t length = stremio_core_board_summary(text, sizeof text);
+        text[length < sizeof text ? length : 0] = 0;
+        // The first line is the totals, the rest one line per row: all of it now and
+        // then, the totals alone in between.
+        if (char *end = std::strchr(text, 10); end != nullptr && second % 5 != 0)
+            *end = 0;
+        log_line("core trial, %d s, %d events: %s", second, events, text);
+    }
+}
+#endif
 
 namespace
 {
@@ -198,6 +245,9 @@ int main()
         return 1;
     }
     log_line("drawing ready");
+#ifdef WITH_CORE
+    std::thread{try_core}.detach();
+#endif
 
     {
         ui::App app{vg, "romfs:/fonts", "romfs:/images"};
