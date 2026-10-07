@@ -10,8 +10,23 @@ namespace ui::theme
 // Every size derives from this unit, as Stremio's are in rem. The screen is laid out at
 // 1920x1080 and scaled to the output.
 inline constexpr float kUnit = 22.0f;
-inline constexpr float kScreenWidth = 1920.0f;
-inline constexpr float kScreenHeight = 1080.0f;
+// The screen as the layout sees it. It is 1920x1080 for a television; a smaller one
+// (see set_screen_scale) makes everything on it larger, for a screen held in the hand.
+inline float screen_width = 1920.0f, screen_height = 1080.0f;
+inline float kScreenWidth()
+{
+    return screen_width;
+}
+inline float kScreenHeight()
+{
+    return screen_height;
+}
+// Lays the screen out for everything to be `scale` times its television size.
+inline void set_screen_scale(float scale)
+{
+    screen_width = 1920.0f / scale;
+    screen_height = 1080.0f / scale;
+}
 
 constexpr float units(float count)
 {
@@ -71,7 +86,12 @@ inline constexpr float kContentInset = units(1.0f);
 inline constexpr float kFocusScale = 1.05f;
 
 // The featured area at the top of the board: the focused item's artwork and details.
-inline constexpr float kHeroHeight = units(24.5f);
+// Its height leaves room under it for a row of posters, on a screen of any size.
+inline float kHeroHeight()
+{
+    const float wanted = units(24.5f), most = kScreenHeight() - units(20.6f);
+    return wanted < most ? wanted : most;
+}
 inline constexpr float kHeroTextTop = units(6.6f);
 inline constexpr float kHeroTextWidth = units(34.0f);
 inline constexpr float kHeroLogoWidth = units(20.0f);

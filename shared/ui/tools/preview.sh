@@ -26,6 +26,6 @@ fi
 if [[ $# -ge 1 ]]; then
     "$build/stremio_preview.exe" "$repo/build/preview-data/board.json" \
         "$repo/build/preview-data/images" "$repo/shared/ui/assets/fonts" \
-        --shot "$1" --keys "${2:-}" ${3:+--backdrop "$3"} ${4:+--calibrate "$4"} ${5:+--trailer "$5"}
+        --shot "$1" --keys "${2:-}" ${3:+--backdrop "$3"} ${4:+--calibrate "$4"} ${5:+--trailer "$5"} ${6:+--handheld "$6"}
     ls -la "$1"
 fi

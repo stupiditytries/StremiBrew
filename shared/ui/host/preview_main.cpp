@@ -103,6 +103,7 @@ void complete_sign_in()
 // A picture standing in for a trailer (see --trailer).
 std::string trailer_picture;
 
+bool handheld = false; // show the handheld UI (see --handheld)
 char calibration_mock = 0; // l listening, w working, d done, f failed
 
 void on_key(GLFWwindow *window, int key, int, int action, int)
@@ -212,6 +213,10 @@ int main(int argc, char **argv)
             const std::string look = argv[index + 1];
             calibration_mock = look.size() > 1 ? look[1] : 'l';
         }
+        else if (option == "--handheld")
+        {
+            handheld = std::atoi(argv[index + 1]) != 0;
+        }
         else if (option == "--trailer")
         {
             // A still that stands in for a playing trailer: a picture of what the
@@ -246,8 +251,7 @@ int main(int argc, char **argv)
     glfwWindowHint(GLFW_STENCIL_BITS, 8);
     glfwWindowHint(GLFW_VISIBLE, shot != nullptr ? GLFW_FALSE : GLFW_TRUE);
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_FALSE);
-    const int width = static_cast<int>(ui::theme::kScreenWidth);
-    const int height = static_cast<int>(ui::theme::kScreenHeight);
+    const int width = 1920, height = 1080;
     // A window shows the screen at half size; a screenshot is drawn at full size.
     GLFWwindow *window = glfwCreateWindow(shot != nullptr ? width : width / 2,
                                           shot != nullptr ? height : height / 2,
@@ -271,6 +275,8 @@ int main(int argc, char **argv)
         account.subtitles_language = "eng";
         instance.set_account(account);
         instance.set_intent_handler(on_intent);
+        if (handheld)
+            instance.set_display_options(true, false);
         data_folder = std::string{argv[1]};
         data_folder.erase(data_folder.find_last_of("/\\") == std::string::npos
                               ? 0

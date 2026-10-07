@@ -26,11 +26,26 @@ constexpr float kLeft = kNavWidth + units(1.5f);
 constexpr float kTop = kTopBarHeight + units(0.2f);
 constexpr float kPillHeight = units(3.0f), kPillWidth = units(13.0f), kPillGap = units(0.8f);
 constexpr float kPaneWidth = units(24.0f);
-constexpr float kPaneLeft = kScreenWidth - units(1.5f) - kPaneWidth;
+float kPaneLeft()
+{
+    return kScreenWidth() - units(1.5f) - kPaneWidth;
+}
 constexpr float kGridTop = kTop + kPillHeight + units(1.0f);
-constexpr float kGridWidth = kPaneLeft - units(1.5f) - kLeft;
-constexpr int kColumns = 6;
-constexpr float kCard = kGridWidth / kColumns;
+float kGridWidth()
+{
+    return kPaneLeft() - units(1.5f) - kLeft;
+}
+// As many columns as leave a poster a fair width: six on a television, fewer on a
+// screen laid out larger.
+int kColumns()
+{
+    const int fit = static_cast<int>(kGridWidth() / units(8.0f));
+    return fit < 3 ? 3 : fit;
+}
+float kCard()
+{
+    return kGridWidth() / static_cast<float>(kColumns());
+}
 constexpr float kListRow = units(2.6f);
 constexpr int kListRows = 10; // of a pill's choices on show at once
 constexpr const char *kPillNames[] = {"Type", "Catalog", "Genre"};
@@ -67,7 +82,7 @@ const std::vector<Choice> &App::discover_choices(int pill) const
 
 float App::discover_poster_height() const
 {
-    const float width = kCard - 2 * kCardPadding;
+    const float width = kCard() - 2 * kCardPadding;
     return discover_.shape == PosterShape::Square      ? width
            : discover_.shape == PosterShape::Landscape ? width * kLandscapeRatio
                                                        : width * kPosterRatio;
@@ -148,7 +163,7 @@ void App::press_discover(Button button)
         discover_area_ = 0;
         return;
     }
-    const int column = discover_focus_ % kColumns;
+    const int column = discover_focus_ % kColumns();
     if (button == Button::Left)
     {
         if (column > 0)
@@ -156,20 +171,20 @@ void App::press_discover(Button button)
         else
             leave_content();
     }
-    else if (button == Button::Right && column + 1 < kColumns && discover_focus_ + 1 < count)
+    else if (button == Button::Right && column + 1 < kColumns() && discover_focus_ + 1 < count)
         ++discover_focus_;
     else if (button == Button::Up)
     {
-        if (discover_focus_ >= kColumns)
-            discover_focus_ -= kColumns;
+        if (discover_focus_ >= kColumns())
+            discover_focus_ -= kColumns();
         else
             discover_area_ = 0;
     }
     else if (button == Button::Down)
     {
-        if (discover_focus_ + kColumns < count)
-            discover_focus_ += kColumns;
-        else if (discover_focus_ / kColumns < (count - 1) / kColumns)
+        if (discover_focus_ + kColumns() < count)
+            discover_focus_ += kColumns();
+        else if (discover_focus_ / kColumns() < (count - 1) / kColumns())
             discover_focus_ = count - 1;
     }
     else if (button == Button::Back)
@@ -186,7 +201,7 @@ void App::press_discover(Button button)
                                     ? std::pair<std::string, LibraryAction>{"Remove from library", LibraryAction::Remove}
                                     : std::pair<std::string, LibraryAction>{"Add to library", LibraryAction::Add});
         menu_focus_ = 0;
-        menu_x_ = kPaneLeft + units(1.0f);
+        menu_x_ = kPaneLeft() + units(1.0f);
         menu_y_ = kGridTop + units(2.0f);
         menu_open_ = true;
     }
@@ -222,7 +237,7 @@ void App::update_discover(float seconds)
         // Ready is the catalog answered and the first screenful of posters loaded.
         discover_held_ += seconds;
         bool ready = discover_ignore_ <= 0 && !discover_.loading;
-        for (int index = 0; ready && index < count && index < kColumns * 3; ++index)
+        for (int index = 0; ready && index < count && index < kColumns() * 3; ++index)
             if (images_->get(discover_.items[static_cast<std::size_t>(index)].poster, kPosterPixels).state ==
                 Images::State::Pending)
                 ready = false;
@@ -241,7 +256,7 @@ void App::update_discover(float seconds)
 
     // More of the catalog as the focus nears the end of what there is.
     if (!discover_hold_ && discover_.more && count > 0 && discover_handler_ &&
-        discover_focus_ / kColumns + 4 >= (count - 1) / kColumns && static_cast<std::size_t>(count) != discover_more_at_)
+        discover_focus_ / kColumns() + 4 >= (count - 1) / kColumns() && static_cast<std::size_t>(count) != discover_more_at_)
     {
         discover_more_at_ = static_cast<std::size_t>(count);
         discover_handler_(3, 0);
@@ -249,13 +264,13 @@ void App::update_discover(float seconds)
 
     // The grid scrolls to keep the focused row whole.
     const float row_height = discover_poster_height() + 2 * kCardPadding + kCardTitleHeight;
-    const float window = kScreenHeight - kGridTop;
-    const float focus_top = static_cast<float>(discover_focus_ / kColumns) * row_height;
+    const float window = kScreenHeight() - kGridTop;
+    const float focus_top = static_cast<float>(discover_focus_ / kColumns()) * row_height;
     if (focus_top < discover_scroll_target_)
         discover_scroll_target_ = focus_top;
     else if (focus_top + row_height > discover_scroll_target_ + window)
         discover_scroll_target_ = focus_top + row_height - window + units(0.5f);
-    if (discover_focus_ < kColumns)
+    if (discover_focus_ < kColumns())
         discover_scroll_target_ = 0;
     discover_scroll_ = eased(discover_scroll_, discover_scroll_target_, seconds);
 
@@ -310,23 +325,23 @@ void App::draw_discover()
     const int pills = discover_.genres.empty() ? 2 : 3;
 
     // The grid, under whatever fade it is in.
-    const float poster_width = kCard - 2 * kCardPadding, poster_height = discover_poster_height();
+    const float poster_width = kCard() - 2 * kCardPadding, poster_height = discover_poster_height();
     const float row_height = poster_height + 2 * kCardPadding + kCardTitleHeight;
     const int count = static_cast<int>(discover_.items.size());
     if (discover_alpha_ > 0.0f && count > 0)
     {
         nvgSave(vg_);
-        nvgScissor(vg_, kNavWidth, kGridTop - units(0.4f), kPaneLeft - kNavWidth - units(0.6f),
-                   kScreenHeight - kGridTop + units(0.4f));
+        nvgScissor(vg_, kNavWidth, kGridTop - units(0.4f), kPaneLeft() - kNavWidth - units(0.6f),
+                   kScreenHeight() - kGridTop + units(0.4f));
         nvgGlobalAlpha(vg_, discover_alpha_);
-        const int first = std::max(0, static_cast<int>(discover_scroll_ / row_height) - 1) * kColumns;
-        const int last = std::min(count, first + kColumns * 6);
+        const int first = std::max(0, static_cast<int>(discover_scroll_ / row_height) - 1) * kColumns();
+        const int last = std::min(count, first + kColumns() * 6);
         const int focused = active && discover_area_ == 1 && !discover_list_open_ ? discover_focus_ : -1;
         const auto card = [&](int index) {
             const BoardItem &item = discover_.items[static_cast<std::size_t>(index)];
             const bool is_focused = index == focused;
-            const float cell_x = kLeft + static_cast<float>(index % kColumns) * kCard;
-            const float cell_y = kGridTop + static_cast<float>(index / kColumns) * row_height - discover_scroll_;
+            const float cell_x = kLeft + static_cast<float>(index % kColumns()) * kCard();
+            const float cell_y = kGridTop + static_cast<float>(index / kColumns()) * row_height - discover_scroll_;
             float x = cell_x + kCardPadding, y = cell_y + kCardPadding, w = poster_width, h = poster_height;
             if (is_focused)
             {
@@ -378,7 +393,7 @@ void App::draw_discover()
         nvgRestore(vg_);
     }
     if (discover_hold_)
-        draw_wheel(kLeft + kGridWidth / 2, kGridTop + (kScreenHeight - kGridTop) / 2,
+        draw_wheel(kLeft + kGridWidth() / 2, kGridTop + (kScreenHeight() - kGridTop) / 2,
                    std::min(1.0f, discover_held_ / 0.25f) * (1.0f - discover_alpha_));
     else if (count == 0)
     {
@@ -400,15 +415,15 @@ void App::draw_discover()
         const Images::Texture art = images_->get(item.background, kArtPixels);
         if (art.state == Images::State::Ready)
         {
-            cover_image(vg_, kPaneLeft, pane_top, kPaneWidth, art_height, kRadius, art, fade);
+            cover_image(vg_, kPaneLeft(), pane_top, kPaneWidth, art_height, kRadius, art, fade);
             // Into the black at its foot, where the title sits.
             nvgBeginPath(vg_);
-            nvgRect(vg_, kPaneLeft - 1, pane_top + art_height * 0.35f, kPaneWidth + 2, art_height * 0.65f + 2);
+            nvgRect(vg_, kPaneLeft() - 1, pane_top + art_height * 0.35f, kPaneWidth + 2, art_height * 0.65f + 2);
             nvgFillPaint(vg_, nvgLinearGradient(vg_, 0, pane_top + art_height * 0.35f, 0, pane_top + art_height,
                                                 nvgRGBAf(0, 0, 0, 0), nvgRGBAf(0, 0, 0, 1)));
             nvgFill(vg_);
         }
-        const float text_x = kPaneLeft + units(0.4f), text_width = kPaneWidth - units(0.8f);
+        const float text_x = kPaneLeft() + units(0.4f), text_width = kPaneWidth - units(0.8f);
         // The title, under the artwork: its logo, or its name written out when it has no
         // logo that can be drawn (see update_discover for the wait before deciding so).
         const float logo_height = units(4.4f);
@@ -496,7 +511,7 @@ void App::draw_discover()
             nvgFontFace(vg_, "medium");
             nvgFontSize(vg_, units(0.95f));
             nvgFillColor(vg_, accent(fade));
-            nvgText(vg_, kPaneLeft + units(0.4f), y + units(1.0f), "In your library", nullptr);
+            nvgText(vg_, kPaneLeft() + units(0.4f), y + units(1.0f), "In your library", nullptr);
         }
     }
 

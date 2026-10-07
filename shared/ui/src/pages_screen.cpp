@@ -30,10 +30,19 @@ constexpr const char *kWeekdays[] = {"Monday", "Tuesday", "Wednesday", "Thursday
 
 constexpr float kLeft = kNavWidth + units(1.5f);
 constexpr float kTop = kTopBarHeight + units(0.2f);
-constexpr float kBottom = kScreenHeight - units(1.5f);
+float kBottom()
+{
+    return kScreenHeight() - units(1.5f);
+}
 constexpr float kListWidth = units(19.0f);
-constexpr float kListLeft = kScreenWidth - units(1.5f) - kListWidth;
-constexpr float kMainWidth = kListLeft - units(1.0f) - kLeft;
+float kListLeft()
+{
+    return kScreenWidth() - units(1.5f) - kListWidth;
+}
+float kMainWidth()
+{
+    return kListLeft() - units(1.0f) - kLeft;
+}
 constexpr float kSelectorHeight = units(3.0f);
 constexpr float kWeekHeight = units(2.4f);
 constexpr float kGridTop = kTop + kSelectorHeight + units(0.4f) + kWeekHeight;
@@ -212,7 +221,7 @@ void App::draw_calendar()
 
     // The month, with the arrows that change it.
     {
-        const float centre = kLeft + kMainWidth / 2, middle = kTop + kSelectorHeight / 2;
+        const float centre = kLeft + kMainWidth() / 2, middle = kTop + kSelectorHeight / 2;
         const float half = units(11.0f);
         const bool focused = active && calendar_area_ == 0;
         if (focused)
@@ -242,7 +251,7 @@ void App::draw_calendar()
     }
 
     // The days of the week, over their columns.
-    const float cell_width = (kMainWidth - 6.0f) / 7.0f;
+    const float cell_width = (kMainWidth() - 6.0f) / 7.0f;
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(1.0f));
     nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
@@ -254,7 +263,7 @@ void App::draw_calendar()
     // The grid: a cell for each day, after as many empty places as the month's first day
     // is into the week.
     const int rows = (shown.first_weekday + shown.days + 6) / 7;
-    const float cell_height = (kBottom - kGridTop - static_cast<float>(rows - 1)) / static_cast<float>(rows);
+    const float cell_height = (kBottom() - kGridTop - static_cast<float>(rows - 1)) / static_cast<float>(rows);
     for (int day = 1; day <= shown.days; ++day)
     {
         const int place = shown.first_weekday + day - 1;
@@ -337,7 +346,7 @@ void App::draw_calendar()
         nvgFontSize(vg_, units(1.05f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
         nvgFillColor(vg_, foreground(0.5f));
-        nvgTextBox(vg_, kListLeft + units(0.4f), kTop + units(0.8f), kListWidth - units(0.8f),
+        nvgTextBox(vg_, kListLeft() + units(0.4f), kTop + units(0.8f), kListWidth - units(0.8f),
                    shown.loading ? "Loading" : "Nothing from your library's series this month.", nullptr);
         return;
     }
@@ -353,28 +362,28 @@ void App::draw_calendar()
         }
         offset += kDayHeading + static_cast<float>(entry.items.size()) * kEntryHeight + units(0.4f) + kDayGap;
     }
-    const float window = kBottom - kTop;
+    const float window = kBottom() - kTop;
     if (!found)
         wanted = offset;
     wanted = std::clamp(wanted, 0.0f, std::max(0.0f, offset - kDayGap - window));
     calendar_scroll_ = eased(calendar_scroll_, wanted, frame_seconds_);
     nvgSave(vg_);
-    nvgScissor(vg_, kListLeft - units(0.4f), kTop - units(0.3f), kListWidth + units(0.8f), window + units(0.6f));
+    nvgScissor(vg_, kListLeft() - units(0.4f), kTop - units(0.3f), kListWidth + units(0.8f), window + units(0.6f));
     float y = kTop - calendar_scroll_;
     for (const CalendarDay &entry : shown.items)
     {
         const float height = kDayHeading + static_cast<float>(entry.items.size()) * kEntryHeight + units(0.4f);
-        if (y + height > kTop - units(1.0f) && y < kBottom + units(1.0f))
+        if (y + height > kTop - units(1.0f) && y < kBottom() + units(1.0f))
         {
             const bool selected = entry.day == calendar_day_;
             nvgBeginPath(vg_);
-            nvgRoundedRect(vg_, kListLeft, y, kListWidth, height, kRadius);
+            nvgRoundedRect(vg_, kListLeft(), y, kListWidth, height, kRadius);
             nvgFillColor(vg_, overlay(1.0f));
             nvgFill(vg_);
             if (selected)
             {
                 nvgBeginPath(vg_);
-                nvgRoundedRect(vg_, kListLeft + 1, y + 1, kListWidth - 2, height - 2, kRadius);
+                nvgRoundedRect(vg_, kListLeft() + 1, y + 1, kListWidth - 2, height - 2, kRadius);
                 nvgStrokeColor(vg_, foreground(0.9f));
                 nvgStrokeWidth(vg_, units(0.12f));
                 nvgStroke(vg_);
@@ -386,7 +395,7 @@ void App::draw_calendar()
             nvgFillColor(vg_, today ? accent() : foreground(0.9f));
             const std::string heading = std::to_string(entry.day) + " " + kMonths[std::clamp(shown.month, 1, 12) - 1] +
                                         (today ? "  \xC2\xB7  Today" : "");
-            nvgText(vg_, kListLeft + units(1.0f), y + kDayHeading / 2, heading.c_str(), nullptr);
+            nvgText(vg_, kListLeft() + units(1.0f), y + kDayHeading / 2, heading.c_str(), nullptr);
             for (std::size_t index = 0; index < entry.items.size(); ++index)
             {
                 const CalendarEntry &item = entry.items[index];
@@ -397,21 +406,21 @@ void App::draw_calendar()
                 {
                     const float inset = units(0.4f);
                     nvgBeginPath(vg_);
-                    nvgRoundedRect(vg_, kListLeft + inset, row, kListWidth - 2 * inset, kEntryHeight, kRadius * 0.7f);
+                    nvgRoundedRect(vg_, kListLeft() + inset, row, kListWidth - 2 * inset, kEntryHeight, kRadius * 0.7f);
                     nvgFillColor(vg_, overlay(3.0f));
                     nvgFill(vg_);
-                    focus_ring(vg_, kListLeft + inset, row, kListWidth - 2 * inset, kEntryHeight, kRadius * 0.7f);
+                    focus_ring(vg_, kListLeft() + inset, row, kListWidth - 2 * inset, kEntryHeight, kRadius * 0.7f);
                 }
                 const std::string number = "S" + std::to_string(item.season) + "E" + std::to_string(item.episode);
                 nvgFontFace(vg_, "medium");
                 nvgFontSize(vg_, units(1.0f));
                 nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
                 nvgFillColor(vg_, foreground(0.6f));
-                nvgText(vg_, kListLeft + kListWidth - units(1.0f), row + kEntryHeight / 2, number.c_str(), nullptr);
+                nvgText(vg_, kListLeft() + kListWidth - units(1.0f), row + kEntryHeight / 2, number.c_str(), nullptr);
                 const float number_width = nvgTextBounds(vg_, 0, 0, number.c_str(), nullptr, nullptr);
                 nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
                 nvgFillColor(vg_, foreground(focused ? 1.0f : 0.9f));
-                fitted_text(vg_, kListLeft + units(1.0f), row + kEntryHeight / 2,
+                fitted_text(vg_, kListLeft() + units(1.0f), row + kEntryHeight / 2,
                             kListWidth - units(3.0f) - number_width, item.name);
             }
         }
@@ -446,7 +455,7 @@ void App::draw_addons()
 
     // The focused add-on is kept in view.
     const float focus_top = heading + static_cast<float>(addons_focus_) * (card + gap);
-    const float window = kScreenHeight - top - units(1.5f);
+    const float window = kScreenHeight() - top - units(1.5f);
     float wanted = addons_scroll_target_;
     if (focus_top - heading < wanted)
         wanted = focus_top - heading;
@@ -456,7 +465,7 @@ void App::draw_addons()
     addons_scroll_ = eased(addons_scroll_, addons_scroll_target_, frame_seconds_);
 
     nvgSave(vg_);
-    nvgScissor(vg_, kNavWidth, kTopBarHeight, kScreenWidth - kNavWidth, kScreenHeight - kTopBarHeight);
+    nvgScissor(vg_, kNavWidth, kTopBarHeight, kScreenWidth() - kNavWidth, kScreenHeight() - kTopBarHeight);
     float y = top - addons_scroll_;
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, kRowTitleSize);
@@ -472,7 +481,7 @@ void App::draw_addons()
 
     for (std::size_t index = 0; index < addons_.size(); ++index, y += card + gap)
     {
-        if (y + card < kTopBarHeight || y > kScreenHeight)
+        if (y + card < kTopBarHeight || y > kScreenHeight())
             continue;
         const Addon &addon = addons_[index];
         const bool focused = active && static_cast<int>(index) == addons_focus_;

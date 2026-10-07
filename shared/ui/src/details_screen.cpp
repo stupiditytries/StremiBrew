@@ -28,14 +28,23 @@ constexpr float kTileWidth = units(19.0f);
 constexpr float kTileHeight = kTileWidth * 9.0f / 16.0f;
 constexpr float kTileGap = units(1.1f);
 constexpr float kTileLabel = units(2.4f);
-constexpr float kTilesTop = kScreenHeight - kTileHeight - kTileLabel - units(1.6f);
+float kTilesTop()
+{
+    return kScreenHeight() - kTileHeight - kTileLabel - units(1.6f);
+}
 constexpr float kSeasonHeight = units(2.6f);
-constexpr float kSeasonsTop = kTilesTop - kSeasonHeight - units(1.3f);
+float kSeasonsTop()
+{
+    return kTilesTop() - kSeasonHeight - units(1.3f);
+}
 constexpr float kSeasonGap = units(0.6f);
 // Season buttons are a little squarer than cards.
 constexpr float kSeasonRadius = kRadius * 0.65f;
 // Where the backdrop starts darkening towards a series' episode row.
-constexpr float kLowerShadeTop = kSeasonsTop - units(14.0f);
+float kLowerShadeTop()
+{
+    return kSeasonsTop() - units(14.0f);
+}
 // How much of each end of the stream list fades away.
 constexpr float kListEdge = units(1.8f);
 
@@ -60,10 +69,16 @@ float settle(float progress)
 
 // Streams: a list down the right-hand side.
 constexpr float kListLeft = units(46.0f);
-constexpr float kListWidth = kScreenWidth - kListLeft - units(3.5f);
+float kListWidth()
+{
+    return kScreenWidth() - kListLeft - units(3.5f);
+}
 constexpr float kListHeaderTop = units(3.4f);
 constexpr float kListTop = units(7.0f);
-constexpr float kListBottom = kScreenHeight - units(2.0f);
+float kListBottom()
+{
+    return kScreenHeight() - units(2.0f);
+}
 constexpr float kStreamHeight = units(5.6f);
 constexpr float kStreamGap = units(0.5f);
 constexpr float kRowPadding = units(0.7f);
@@ -316,7 +331,7 @@ void DetailsScreen::follow_focus()
 {
     {
         const float pitch = kTileWidth + kTileGap;
-        const float window = kScreenWidth - kLeft - units(2.0f);
+        const float window = kScreenWidth() - kLeft - units(2.0f);
         const float left = static_cast<float>(episode_focus_) * pitch;
         if (left < episodes_scroll_target_)
             episodes_scroll_target_ = left;
@@ -327,7 +342,7 @@ void DetailsScreen::follow_focus()
         const float pitch = kStreamHeight + kStreamGap;
         // The focused card stays clear of the fading edges at both ends of the list.
         const float window =
-            (is_series() ? kSeasonsTop - units(0.6f) : kListBottom) - kListTop - kListEdge;
+            (is_series() ? kSeasonsTop() - units(0.6f) : kListBottom()) - kListTop - kListEdge;
         const float top = static_cast<float>(stream_focus_) * pitch;
         const float lead = stream_focus_ == 0 ? 0.0f : kListEdge;
         if (top - lead < streams_scroll_target_)
@@ -620,13 +635,13 @@ void DetailsScreen::draw_seasons()
         {
             // Keep the selected season on screen.
             const float left = x + seasons_scroll_ - kLeft;
-            const float window = kScreenWidth - kLeft - units(2.0f);
+            const float window = kScreenWidth() - kLeft - units(2.0f);
             if (left < seasons_scroll_target_)
                 seasons_scroll_target_ = left;
             else if (left + width > seasons_scroll_target_ + window)
                 seasons_scroll_target_ = left + width - window;
         }
-        const float y = kSeasonsTop + rise;
+        const float y = kSeasonsTop() + rise;
         nvgBeginPath(vg_);
         nvgRoundedRect(vg_, x, y, width, kSeasonHeight, kSeasonRadius);
         nvgFillColor(vg_, selected ? accent(shown) : overlay(2.4f * shown));
@@ -648,7 +663,7 @@ void DetailsScreen::draw_episodes()
         nvgFontSize(vg_, units(1.1f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
         nvgFillColor(vg_, foreground(0.6f * settle(appear_)));
-        nvgText(vg_, kLeft, kTilesTop,
+        nvgText(vg_, kLeft, kTilesTop(),
                 details_.state == Details::State::Ready ? "No episodes listed." : "Loading episodes",
                 nullptr);
         return;
@@ -656,7 +671,7 @@ void DetailsScreen::draw_episodes()
     const float pitch = kTileWidth + kTileGap;
     const auto first = static_cast<std::size_t>(std::max(0.0f, std::floor(episodes_scroll_ / pitch) - 1));
     const std::size_t last =
-        std::min(episodes.size(), first + static_cast<std::size_t>(kScreenWidth / pitch) + 3);
+        std::min(episodes.size(), first + static_cast<std::size_t>(kScreenWidth() / pitch) + 3);
     const std::size_t focused = zone_ == Zone::Episodes ? episode_focus_ : episodes.size();
     // While the streams are open the row stays, dimmed, with the chosen episode marked.
     const float dim = 1.0f - 0.65f * streams_;
@@ -668,7 +683,7 @@ void DetailsScreen::draw_episodes()
         const bool is_focused = index == focused;
         const bool is_chosen = zone_ == Zone::Streams && episode.id == chosen_id_;
         float x = kLeft + static_cast<float>(index) * pitch - episodes_scroll_ + tiles_shift_;
-        float y = kTilesTop + rise;
+        float y = kTilesTop() + rise;
         float w = kTileWidth, h = kTileHeight;
         if (is_focused)
         {
@@ -751,7 +766,7 @@ void DetailsScreen::draw_episodes()
         nvgFillColor(vg_, foreground((is_focused || is_chosen ? 1.0f : 0.8f) * alpha));
         fitted_text(vg_,
                     kLeft + static_cast<float>(index) * pitch - episodes_scroll_ + tiles_shift_ + units(0.2f),
-                    kTilesTop + rise + kTileHeight + kTileLabel / 2 + units(0.3f),
+                    kTilesTop() + rise + kTileHeight + kTileLabel / 2 + units(0.3f),
                     kTileWidth - units(0.4f), drawable(episode.title));
     };
     for (std::size_t index = first; index < last; ++index)
@@ -867,13 +882,13 @@ void DetailsScreen::draw_streams()
     // A series' list stops above its episode row; a film's runs to the bottom. Each end of
     // the list has a short edge in which cards fade away, and are gone before the square
     // cut that ends them; the top one only once the list has been scrolled.
-    const float bottom = is_series() ? kSeasonsTop - units(0.6f) : kListBottom;
+    const float bottom = is_series() ? kSeasonsTop() - units(0.6f) : kListBottom();
     const float list_top = kListTop - units(0.4f);
     const float solid_bottom = bottom - kListEdge;
     const float solid_top =
         list_top + kListEdge * std::clamp(streams_scroll_ / units(1.0f), 0.0f, 1.0f);
     constexpr float kGoneBy = 0.75f; // how far into an edge a card has faded out entirely
-    nvgScissor(vg_, x - units(0.5f), list_top, kListWidth + units(1.0f), bottom - list_top);
+    nvgScissor(vg_, x - units(0.5f), list_top, kListWidth() + units(1.0f), bottom - list_top);
     const float pitch = kStreamHeight + kStreamGap;
     const std::size_t count = std::min(details_.streams.size(), stream_text_.size());
     for (std::size_t index = 0; index < count; ++index)
@@ -899,7 +914,7 @@ void DetailsScreen::draw_streams()
             fade_to = solid_top - (solid_top - list_top) * kGoneBy;
         }
         nvgGlobalAlpha(vg_, shown * arrived);
-        draw_stream(details_.streams[index], stream_text_[index], x, y, kListWidth,
+        draw_stream(details_.streams[index], stream_text_[index], x, y, kListWidth(),
                     zone_ == Zone::Streams && index == stream_focus_, fade_from, fade_to);
     }
 
@@ -919,7 +934,7 @@ void DetailsScreen::draw_streams()
     if (details_.streams.empty() && details_.streams_loading == 0)
     {
         nvgGlobalAlpha(vg_, shown * (1.0f - asking_alpha_));
-        nvgTextBox(vg_, x, note_y, kListWidth,
+        nvgTextBox(vg_, x, note_y, kListWidth(),
                    "No add-on offered a stream for this. Streams come from the add-ons "
                    "installed on your Stremio account.",
                    nullptr);
@@ -934,7 +949,7 @@ void DetailsScreen::draw_streams()
 void DetailsScreen::draw_backdrop(float alpha)
 {
     nvgBeginPath(vg_);
-    nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+    nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
     nvgFillColor(vg_, nvgRGBAf(0, 0, 0, alpha));
     nvgFill(vg_);
     const Images::Texture art = backdrop == Backdrop::Sharp
@@ -943,19 +958,19 @@ void DetailsScreen::draw_backdrop(float alpha)
     if (art.state != Images::State::Ready)
         return;
     const float shown = settle(appear_) * alpha;
-    cover_image(vg_, 0, 0, kScreenWidth, kScreenHeight, 0, art, shown);
+    cover_image(vg_, 0, 0, kScreenWidth(), kScreenHeight(), 0, art, shown);
     const auto shade = [&](float x0, float y0, float x1, float y1, NVGcolor from, NVGcolor to) {
         nvgBeginPath(vg_);
-        nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+        nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
         nvgFillPaint(vg_, nvgLinearGradient(vg_, x0, y0, x1, y1, from, to));
         nvgFill(vg_);
     };
     const float wash = backdrop == Backdrop::Sharp ? 0.62f : 0.5f;
     const NVGcolor grey = nvgRGBAf(0.07f, 0.07f, 0.085f, wash * shown);
-    shade(0, 0, kScreenWidth, 0, grey, grey);
-    shade(0, 0, kScreenWidth * 0.75f, 0, nvgRGBAf(0, 0, 0, 0.72f * shown), nvgRGBAf(0, 0, 0, 0));
+    shade(0, 0, kScreenWidth(), 0, grey, grey);
+    shade(0, 0, kScreenWidth() * 0.75f, 0, nvgRGBAf(0, 0, 0, 0.72f * shown), nvgRGBAf(0, 0, 0, 0));
     if (is_series())
-        shade(0, kLowerShadeTop, 0, kSeasonsTop + units(1.0f), nvgRGBAf(0, 0, 0, 0),
+        shade(0, kLowerShadeTop(), 0, kSeasonsTop() + units(1.0f), nvgRGBAf(0, 0, 0, 0),
               nvgRGBAf(0, 0, 0, 0.78f * shown));
 }
 

@@ -17,8 +17,14 @@ namespace
 {
 constexpr float kSide = units(4.0f);
 constexpr float kBarHeight = units(0.3f);
-constexpr float kBarTop = kScreenHeight - units(7.4f);
-constexpr float kRowMiddle = kScreenHeight - units(4.0f);
+float kBarTop()
+{
+    return kScreenHeight() - units(7.4f);
+}
+float kRowMiddle()
+{
+    return kScreenHeight() - units(4.0f);
+}
 constexpr float kTitleMiddle = units(3.6f);
 constexpr float kButton = units(2.9f); // a button's diameter
 constexpr float kButtonPitch = kButton + units(0.9f);
@@ -36,7 +42,10 @@ constexpr float kPi = 3.14159265f;
 constexpr float kMenuWidth = units(26.0f);
 constexpr float kMenuRow = units(3.4f);
 constexpr float kMenuTop = units(8.0f);
-constexpr float kMenuBottom = kScreenHeight - units(3.0f);
+float kMenuBottom()
+{
+    return kScreenHeight() - units(3.0f);
+}
 
 // 1:02:03 for anything in a video an hour or longer, 2:03 otherwise.
 std::string clock_text(double seconds, bool hours)
@@ -293,7 +302,7 @@ void PlayerScreen::update(float seconds)
     if (menu_ == Menu::None && menu_slide_ < 0.01f)
         menu_shown_ = Menu::None;
     // The focused row is kept inside the list.
-    const float window = kMenuBottom - kMenuTop - (menu_shown_ == Menu::Subtitles ? 2 * kMenuRow + units(0.6f) : 0.0f);
+    const float window = kMenuBottom() - kMenuTop - (menu_shown_ == Menu::Subtitles ? 2 * kMenuRow + units(0.6f) : 0.0f);
     const float top = static_cast<float>(std::max(0, menu_focus_)) * kMenuRow;
     if (top < menu_scroll_target_)
         menu_scroll_target_ = top;
@@ -432,7 +441,7 @@ void PlayerScreen::draw_scrub_preview(float thumb_x, float bar_top, float alpha)
     const bool hours = playback_.duration >= 3600;
     const std::string label = clock_text(scrub_target_, hours);
     const float width = units(15.0f), height = width * 9.0f / 16.0f;
-    const float left = std::clamp(thumb_x - width / 2, kSide, kScreenWidth - kSide - width);
+    const float left = std::clamp(thumb_x - width / 2, kSide, kScreenWidth() - kSide - width);
     const float top = bar_top - units(2.6f) - height;
     // The picture on hand is shown while it is of a moment near the marker's; a newer one
     // replaces it when it arrives.
@@ -466,7 +475,7 @@ void PlayerScreen::draw_scrub_preview(float thumb_x, float bar_top, float alpha)
     const float label_width = nvgTextBounds(vg_, 0, 0, label.c_str(), nullptr, nullptr) + units(1.4f);
     const float label_left =
         pictured ? left + (width - label_width) / 2
-                 : std::clamp(thumb_x - label_width / 2, kSide, kScreenWidth - kSide - label_width);
+                 : std::clamp(thumb_x - label_width / 2, kSide, kScreenWidth() - kSide - label_width);
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, label_left, label_middle - units(1.1f), label_width, units(2.2f), units(0.5f));
     nvgFillColor(vg_, nvgRGBAf(0.06f, 0.06f, 0.08f, 0.9f * alpha));
@@ -538,8 +547,8 @@ void PlayerScreen::draw_subtitle()
 {
     if (playback_.subtitle.empty())
         return;
-    draw_subtitle_text(vg_, subtitle_style_, playback_.subtitle, kScreenWidth / 2,
-                       kScreenHeight - units(3.6f) - controls_ * units(8.0f), kScreenWidth * 0.72f);
+    draw_subtitle_text(vg_, subtitle_style_, playback_.subtitle, kScreenWidth() / 2,
+                       kScreenHeight() - units(3.6f) - controls_ * units(8.0f), kScreenWidth() * 0.72f);
 }
 
 void PlayerScreen::set_subtitle_style(const SubtitleStyle &style)
@@ -637,7 +646,7 @@ void PlayerScreen::draw_calibration()
     nvgFontSize(vg_, units(1.15f));
     const float height = units(3.2f), top = units(2.0f);
     const float width = nvgTextBounds(vg_, 0, 0, text, nullptr, nullptr) + units(5.2f);
-    const float left = kScreenWidth - kSide - width;
+    const float left = kScreenWidth() - kSide - width;
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, left, top, width, height, height / 2);
     nvgFillColor(vg_, nvgRGBAf(0.05f, 0.05f, 0.07f, 0.9f * alpha));
@@ -652,9 +661,9 @@ void PlayerScreen::draw_menu()
 {
     if (menu_shown_ == Menu::None || menu_slide_ < 0.01f)
         return;
-    const float left = kScreenWidth - kMenuWidth * menu_slide_;
+    const float left = kScreenWidth() - kMenuWidth * menu_slide_;
     nvgBeginPath(vg_);
-    nvgRect(vg_, left, 0, kMenuWidth, kScreenHeight);
+    nvgRect(vg_, left, 0, kMenuWidth, kScreenHeight());
     nvgFillColor(vg_, nvgRGBAf(0.04f, 0.04f, 0.05f, 0.94f));
     nvgFill(vg_);
     const float inset = units(2.2f);
@@ -724,11 +733,11 @@ void PlayerScreen::draw_menu()
     const std::vector<TrackOption> &options = menu_options();
     const int selected = menu_selected();
     nvgSave(vg_);
-    nvgScissor(vg_, left, list_top - units(0.3f), kMenuWidth, kMenuBottom - list_top + units(0.6f));
+    nvgScissor(vg_, left, list_top - units(0.3f), kMenuWidth, kMenuBottom() - list_top + units(0.6f));
     for (std::size_t index = 0; index < options.size(); ++index)
     {
         const float top = list_top + static_cast<float>(index) * kMenuRow - menu_scroll_;
-        if (top + kMenuRow < list_top - units(1.0f) || top > kMenuBottom + units(1.0f))
+        if (top + kMenuRow < list_top - units(1.0f) || top > kMenuBottom() + units(1.0f))
             continue;
         const bool focused = menu_ != Menu::None && static_cast<int>(index) == menu_focus_;
         const bool chosen = static_cast<int>(index) == selected;
@@ -772,11 +781,11 @@ void PlayerScreen::draw_menu()
 
 void PlayerScreen::draw()
 {
-    const float centre_x = kScreenWidth / 2, centre_y = kScreenHeight / 2;
+    const float centre_x = kScreenWidth() / 2, centre_y = kScreenHeight() / 2;
     if (playback_.state == Playback::State::Failed)
     {
         nvgBeginPath(vg_);
-        nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+        nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
         nvgFillColor(vg_, nvgRGBAf(0, 0, 0, 0.75f));
         nvgFill(vg_);
         nvgTextAlign(vg_, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
@@ -806,13 +815,13 @@ void PlayerScreen::draw()
     const auto shade = [&](float top, float height, bool lower) {
         const NVGcolor dark = nvgRGBAf(0, 0, 0, 0.82f * shown), clear = nvgRGBAf(0, 0, 0, 0);
         nvgBeginPath(vg_);
-        nvgRect(vg_, 0, top, kScreenWidth, height);
+        nvgRect(vg_, 0, top, kScreenWidth(), height);
         nvgFillPaint(vg_, nvgLinearGradient(vg_, 0, top, 0, top + height, lower ? clear : dark,
                                             lower ? dark : clear));
         nvgFill(vg_);
     };
     shade(0, units(9.0f), false);
-    shade(kScreenHeight - units(15.0f), units(15.0f), true);
+    shade(kScreenHeight() - units(15.0f), units(15.0f), true);
 
     // Top: a back mark and what is playing.
     nvgBeginPath(vg_);
@@ -830,7 +839,7 @@ void PlayerScreen::draw()
     nvgFontFace(vg_, "semibold");
     nvgFontSize(vg_, units(1.5f));
     nvgFillColor(vg_, foreground(shown));
-    fitted_text(vg_, kSide + units(2.2f), kTitleMiddle, kScreenWidth * 0.8f, drawable(title_));
+    fitted_text(vg_, kSide + units(2.2f), kTitleMiddle, kScreenWidth() * 0.8f, drawable(title_));
 
     // The seek bar: a little thicker while the focus is on it.
     const double duration = playback_.duration;
@@ -838,9 +847,9 @@ void PlayerScreen::draw()
     const float along =
         duration > 0 ? static_cast<float>(std::clamp(position / duration, 0.0, 1.0)) : 0.0f;
     const bool bar_focused = !on_buttons_ && menu_ == Menu::None;
-    const float bar_width = kScreenWidth - 2 * kSide;
+    const float bar_width = kScreenWidth() - 2 * kSide;
     const float thickness = bar_focused ? kBarHeight * 1.5f : kBarHeight;
-    const float track_top = kBarTop + (kBarHeight - thickness) / 2;
+    const float track_top = kBarTop() + (kBarHeight - thickness) / 2;
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, kSide, track_top, bar_width, thickness, thickness / 2);
     nvgFillColor(vg_, nvgRGBAf(1, 1, 1, 0.28f * shown));
@@ -858,13 +867,13 @@ void PlayerScreen::draw()
     nvgRoundedRect(vg_, kSide, track_top, bar_width * along, thickness, thickness / 2);
     nvgFillColor(vg_, accent(shown));
     nvgFill(vg_);
-    const float thumb_x = kSide + bar_width * along, thumb_y = kBarTop + kBarHeight / 2;
+    const float thumb_x = kSide + bar_width * along, thumb_y = kBarTop() + kBarHeight / 2;
     nvgBeginPath(vg_);
     nvgCircle(vg_, thumb_x, thumb_y, scrubbing_ ? units(0.75f) : bar_focused ? units(0.6f) : units(0.45f));
     nvgFillColor(vg_, foreground_solid(shown));
     nvgFill(vg_);
     if (scrubbing_)
-        draw_scrub_preview(thumb_x, kBarTop, shown);
+        draw_scrub_preview(thumb_x, kBarTop(), shown);
 
     // Under the bar: the transport buttons and the time on the left, the track buttons on
     // the right.
@@ -874,7 +883,7 @@ void PlayerScreen::draw()
     float x = kSide + kButton / 2;
     for (int index = 0; index < 3; ++index)
     {
-        draw_control(static_cast<Control>(index), x, kRowMiddle, kButton, focused(index), shown);
+        draw_control(static_cast<Control>(index), x, kRowMiddle(), kButton, focused(index), shown);
         x += kButtonPitch;
     }
     const bool hours = duration >= 3600;
@@ -882,17 +891,17 @@ void PlayerScreen::draw()
     nvgFontFace(vg_, "medium");
     nvgFontSize(vg_, units(1.15f));
     nvgFillColor(vg_, foreground(shown));
-    const float end = nvgText(vg_, x - kButton / 2 + units(0.6f), kRowMiddle,
+    const float end = nvgText(vg_, x - kButton / 2 + units(0.6f), kRowMiddle(),
                               clock_text(position, hours).c_str(), nullptr);
     if (duration > 0)
     {
         nvgFillColor(vg_, foreground(0.6f * shown));
-        nvgText(vg_, end, kRowMiddle, ("  /  " + clock_text(duration, hours)).c_str(), nullptr);
+        nvgText(vg_, end, kRowMiddle(), ("  /  " + clock_text(duration, hours)).c_str(), nullptr);
     }
-    x = kScreenWidth - kSide - kButton / 2 - kButtonPitch;
+    x = kScreenWidth() - kSide - kButton / 2 - kButtonPitch;
     for (int index = 3; index < kControls; ++index)
     {
-        draw_control(static_cast<Control>(index), x, kRowMiddle, kButton, focused(index), shown);
+        draw_control(static_cast<Control>(index), x, kRowMiddle(), kButton, focused(index), shown);
         x += kButtonPitch;
     }
     draw_calibration();

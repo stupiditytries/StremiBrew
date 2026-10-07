@@ -134,6 +134,16 @@ class App
     void set_calendar_handler(std::function<void(int year, int month)> handler);
     void set_calendar(CalendarMonth month);
     void set_addons(std::vector<Addon> addons);
+    // For a console whose screen can be held in the hand. Offering the options puts a
+    // Display section in Settings: a handheld UI, in which everything is a little larger,
+    // and whether it is chosen automatically (in the hand yes, docked no). The host says
+    // whether the console is docked, and saves the two choices when they change.
+    void set_display_options(bool handheld_ui, bool automatic);
+    void set_display_handler(std::function<void(bool handheld_ui, bool automatic)> handler);
+    void set_docked(bool docked)
+    {
+        docked_ = docked;
+    }
     // Discover. The handler is asked to choose what is browsed: `kind` 0 the `index`th
     // kind of title, 1 the catalog, 2 the genre; 3 asks for the catalog's next page and
     // -1 opens Discover on its first catalog.
@@ -348,6 +358,13 @@ class App
     bool discover_named_ = false;   // its name is written out: it has no logo
     // Going to another tab brings its screen in with a short fade and rise; in Settings,
     // what is beside the list fades from one section's to the next's.
+    bool display_options_ = false, handheld_ui_ = false, handheld_auto_ = true, docked_ = true;
+    std::function<void(bool, bool)> display_handler_;
+    // Whether the handheld UI is the one in use now.
+    bool handheld_now() const
+    {
+        return display_options_ && (handheld_auto_ ? !docked_ : handheld_ui_);
+    }
     float tab_reveal_ = 1;
     int settings_side_ = 0;
     float settings_side_alpha_ = 1;

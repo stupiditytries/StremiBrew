@@ -105,6 +105,18 @@ void App::set_account(Account account)
     account_ = std::move(account);
 }
 
+void App::set_display_options(bool handheld_ui, bool automatic)
+{
+    display_options_ = true;
+    handheld_ui_ = handheld_ui;
+    handheld_auto_ = automatic;
+}
+
+void App::set_display_handler(std::function<void(bool handheld_ui, bool automatic)> handler)
+{
+    display_handler_ = std::move(handler);
+}
+
 void App::set_intent_handler(std::function<void(Intent)> handler)
 {
     intent_ = std::move(handler);
@@ -310,7 +322,7 @@ void App::leave_content()
 // no featured area), under the search bar.
 float App::rows_top() const
 {
-    return shown_view_ == View::Search ? kTopBarHeight + units(0.8f) : kHeroHeight + units(0.4f);
+    return shown_view_ == View::Search ? kTopBarHeight + units(0.8f) : kHeroHeight() + units(0.4f);
 }
 
 // Opens a title's page.
@@ -426,7 +438,7 @@ void App::follow_focus()
         // What a search found has the screen's height to itself: it scrolls only as far
         // as the focused row needs.
         const float top = row_top(row_focus_), bottom = top + row_height(rows_[row_focus_]) - kRowGap;
-        const float window = kScreenHeight - rows_top() - units(1.0f);
+        const float window = kScreenHeight() - rows_top() - units(1.0f);
         if (top < scroll_y_target_)
             scroll_y_target_ = top;
         else if (bottom > scroll_y_target_ + window)
@@ -436,7 +448,7 @@ void App::follow_focus()
         scroll_y_target_ = row_top(row_focus_);
 
     const BoardRow &row = rows_[row_focus_];
-    const float visible = kScreenWidth - kNavWidth - 2 * kContentInset;
+    const float visible = kScreenWidth() - kNavWidth - 2 * kContentInset;
     const float width = card_width(row);
     const float left = static_cast<float>(column_focus_[row_focus_]) * width;
     float &target = scroll_x_target_[row_focus_];
@@ -585,6 +597,7 @@ std::size_t App::focus_mark() const
     add(static_cast<std::size_t>(calendar_area_ * 4096 + calendar_day_ * 64 + calendar_entry_));
     add(static_cast<std::size_t>(calendar_.year * 12 + calendar_.month));
     add(static_cast<std::size_t>(addons_focus_));
+    add(static_cast<std::size_t>((handheld_ui_ ? 1 : 0) + (handheld_auto_ ? 2 : 0)));
     add(static_cast<std::size_t>(discover_area_ * 8 + discover_pill_ + (discover_list_open_ ? 64 : 0)));
     add(static_cast<std::size_t>(discover_focus_ * 64 + discover_list_focus_));
     add(static_cast<std::size_t>(speech_.chosen));
@@ -708,8 +721,8 @@ void App::apply(Button button)
                                         scroll_x_[row_focus_];
                 const float tile_top = rows_top() - scroll_y_ + row_top(row_focus_) +
                                        kRowTitleSize * 1.2f + kRowTitleGap;
-                menu_x_ = std::min(tile_left + width + units(0.3f), kScreenWidth - units(22.0f));
-                menu_y_ = std::clamp(tile_top + units(1.0f), kTopBarHeight, kScreenHeight - units(9.0f));
+                menu_x_ = std::min(tile_left + width + units(0.3f), kScreenWidth() - units(22.0f));
+                menu_y_ = std::clamp(tile_top + units(1.0f), kTopBarHeight, kScreenHeight() - units(9.0f));
                 menu_open_ = true;
             }
         }
@@ -769,6 +782,16 @@ void App::apply(Button button)
 
 void App::update(float seconds)
 {
+    // The handheld UI is the same layout on a smaller screen, so everything on it is
+    // larger. (Without display options, as on a television-only console, the screen
+    // stays as it is.)
+    constexpr float kHandheldScale = 1.15f;
+    const float scale = handheld_now() ? kHandheldScale : 1.0f;
+    if (kScreenWidth() != 1920.0f / scale)
+    {
+        set_screen_scale(scale);
+        follow_focus();
+    }
     if (player_open_)
         player_->update(seconds);
     else
@@ -983,7 +1006,7 @@ void App::draw_navigation()
     // little above its button's centre (its name appears beneath it), so the buttons start
     // that much lower for the icons themselves to be centred.
     const float group = kTabCount * kNavButton + (kTabCount - 1) * kNavGap;
-    float top = (kScreenHeight - group) / 2 + kNavIconRise;
+    float top = (kScreenHeight() - group) / 2 + kNavIconRise;
     const float x = (kNavWidth - kNavButton) / 2;
     for (int index = 0; index < kTabCount; ++index)
     {
@@ -1024,7 +1047,7 @@ void App::draw_navigation()
 
 void App::draw_top_bar()
 {
-    const float x = (kScreenWidth - kSearchWidth) / 2;
+    const float x = (kScreenWidth() - kSearchWidth) / 2;
     const float y = (kTopBarHeight - kSearchHeight) / 2;
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, x, y, kSearchWidth, kSearchHeight, kSearchHeight / 2);
@@ -1066,7 +1089,7 @@ void App::draw_keyboard()
         return;
     const float pitch_x = kKeyWidth + kKeyGap, pitch_y = kKeyHeight + kKeyGap;
     const float width = kKeyColumns * pitch_x - kKeyGap, height = kKeyRows * pitch_y - kKeyGap;
-    const float left = (kScreenWidth - width) / 2, top = kKeyboardTop;
+    const float left = (kScreenWidth() - width) / 2, top = kKeyboardTop;
     const float pad = units(0.9f);
     nvgBeginPath(vg_);
     nvgRoundedRect(vg_, left - pad, top - pad, width + 2 * pad, height + 2 * pad, kRadius);
@@ -1166,7 +1189,7 @@ void App::draw_row(const BoardRow &row, std::size_t index, float top)
     const float scroll = scroll_x_[index];
     const auto first = static_cast<std::size_t>(std::max(0.0f, std::floor(scroll / width) - 1));
     const std::size_t last = std::min(
-        row.items.size(), first + static_cast<std::size_t>(kScreenWidth / width) + 3);
+        row.items.size(), first + static_cast<std::size_t>(kScreenWidth() / width) + 3);
     const std::size_t focused = row_focused ? column_focus_[index] : row.items.size();
 
     const auto draw_card = [&](std::size_t column) {
@@ -1273,9 +1296,9 @@ void App::draw_hero()
     const float rise = frame_seconds_ / kHeroFadeIn;
 
     // Artwork, 16:9 at the area's full height, against the right edge.
-    const float image_height = kHeroHeight;
+    const float image_height = kHeroHeight();
     const float image_width = image_height * 16.0f / 9.0f;
-    const float image_left = kScreenWidth - image_width;
+    const float image_left = kScreenWidth() - image_width;
     const Images::Texture background = images_->get(item->background, kArtPixels);
     const bool art = background.state == Images::State::Ready;
     const bool trailer = trailer_alpha_ > 0.01f && trailer_image_ != 0;
@@ -1425,13 +1448,13 @@ void App::draw_rows()
     // Rows are clipped to the area right of the navigation column.
     // The rows live under the featured area; what scrolls above that line is cut off.
     nvgSave(vg_);
-    const float edge = shown_view_ == View::Search ? kTopBarHeight : kHeroHeight;
-    nvgScissor(vg_, kNavWidth, edge, kScreenWidth - kNavWidth, kScreenHeight - edge);
+    const float edge = shown_view_ == View::Search ? kTopBarHeight : kHeroHeight();
+    nvgScissor(vg_, kNavWidth, edge, kScreenWidth() - kNavWidth, kScreenHeight() - edge);
     float top = rows_top() - scroll_y_;
     for (std::size_t index = 0; index < rows_.size(); ++index)
     {
         const float height = row_height(rows_[index]);
-        if (top + height > 0 && top < kScreenHeight)
+        if (top + height > 0 && top < kScreenHeight())
             draw_row(rows_[index], index, top);
         top += height;
     }
@@ -1460,7 +1483,7 @@ void App::draw_wheel(float x, float y, float alpha)
 void App::draw(int width, int height)
 {
     images_->begin_frame();
-    nvgBeginFrame(vg_, kScreenWidth, kScreenHeight, static_cast<float>(width) / kScreenWidth);
+    nvgBeginFrame(vg_, kScreenWidth(), kScreenHeight(), static_cast<float>(width) / kScreenWidth());
     (void)height;
     if (player_open_)
     {
@@ -1471,7 +1494,7 @@ void App::draw(int width, int height)
     }
 
     nvgBeginPath(vg_);
-    nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+    nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
     nvgFillColor(vg_, background());
     nvgFill(vg_);
 
@@ -1484,7 +1507,7 @@ void App::draw(int width, int height)
         {
             const float rest = player_leaving_ * player_leaving_;
             nvgBeginPath(vg_);
-            nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+            nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
             nvgFillColor(vg_, nvgRGBAf(0, 0, 0, rest));
             nvgFill(vg_);
         }
@@ -1526,12 +1549,12 @@ void App::draw(int width, int height)
     if (veil > 0.0f)
     {
         nvgBeginPath(vg_);
-        nvgRect(vg_, kNavWidth, 0, kScreenWidth - kNavWidth, kScreenHeight);
+        nvgRect(vg_, kNavWidth, 0, kScreenWidth() - kNavWidth, kScreenHeight());
         nvgFillColor(vg_, nvgRGBAf(0, 0, 0, veil));
         nvgFill(vg_);
     }
     // A wheel while a search is on its way.
-    draw_wheel(kNavWidth + (kScreenWidth - kNavWidth) / 2, kScreenHeight / 2, wheel_alpha_);
+    draw_wheel(kNavWidth + (kScreenWidth() - kNavWidth) / 2, kScreenHeight() / 2, wheel_alpha_);
     if (rows_.empty() && shown_view_ != View::Board && !swap_pending_ && !swap_holding_ &&
         (shown_view_ == View::Search || kTabs[selected_tab_].icon == Icon::Library))
     {
@@ -1554,7 +1577,7 @@ void App::draw(int width, int height)
     if (veil_ > 0.0f)
     {
         nvgBeginPath(vg_);
-        nvgRect(vg_, 0, 0, kScreenWidth, kScreenHeight);
+        nvgRect(vg_, 0, 0, kScreenWidth(), kScreenHeight());
         nvgFillColor(vg_, nvgRGBAf(0, 0, 0, veil_));
         nvgFill(vg_);
     }

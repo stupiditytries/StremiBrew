@@ -21,15 +21,18 @@ using namespace theme;
 
 namespace
 {
-constexpr const char *kSections[] = {"Account", "Playback", "Subtitles", "Auto-calibrate"};
-constexpr int kSectionCount = 4;
+// The last section is offered only where the host has a screen that can be held in the
+// hand (see App::set_display_options).
+constexpr const char *kSections[] = {"Account", "Playback", "Subtitles", "Auto-calibrate", "Display"};
+constexpr int kSectionCount = 5;
 // How many settings each section has.
-constexpr int kRows[kSectionCount] = {1, 3, 4, 3};
+constexpr int kRows[kSectionCount] = {1, 3, 4, 3, 2};
 constexpr const char *kLabels[kSectionCount][4] = {
     {"", "", "", ""},
     {"Audio language", "Subtitles", "Trailers on the home screen", ""},
     {"Size", "Background", "Colour", "Weight"},
     {"Speech model", "Download Status", "Calibration Offset", ""},
+    {"Switch UI automatically", "Handheld UI", "", ""},
 };
 
 constexpr float kRowHeight = units(3.25f), kSettingGap = units(0.6f);
@@ -39,7 +42,20 @@ constexpr float kTop = kTopBarHeight + units(1.2f);
 // Moves the setting at (section, row) to its next or previous choice.
 void App::change_setting(int section, int row, int step)
 {
-    if (section == 1 && row < 2)
+    if (section == 4)
+    {
+        // Choosing the handheld UI (or not) by hand ends the automatic choosing.
+        if (row == 0)
+            handheld_auto_ = !handheld_auto_;
+        else
+        {
+            handheld_ui_ = handheld_auto_ ? docked_ : !handheld_ui_;
+            handheld_auto_ = false;
+        }
+        if (display_handler_)
+            display_handler_(handheld_ui_, handheld_auto_);
+    }
+    else if (section == 1 && row < 2)
         change_language(row == 1, step);
     else if (section == 1)
     {
@@ -106,7 +122,7 @@ void App::press_settings(Button button)
     {
         if (row + 1 < kRows[section])
             ++row;
-        else if (section + 1 < kSectionCount)
+        else if (section + 1 < (display_options_ ? kSectionCount : kSectionCount - 1))
         {
             ++section;
             row = 0;
@@ -124,6 +140,8 @@ void App::press_settings(Button button)
 std::string App::setting_value(int section, int row) const
 {
     char text[32];
+    if (section == 4)
+        return (row == 0 ? handheld_auto_ : handheld_now()) ? "On" : "Off";
     if (section == 1)
     {
         if (row == 0)
@@ -320,10 +338,11 @@ void App::draw_settings()
         return kRowTitleSize * 1.2f + units(1.0f);
     };
     const float width = units(34.0f);
-    const float bottom = kScreenHeight - units(2.0f);
+    const float bottom = kScreenHeight() - units(2.0f);
     // Where the focused setting falls in the list, to keep it in view.
     float y = 0, focus_y = 0;
-    for (int section = 0; section < kSectionCount; ++section)
+    const int sections = display_options_ ? kSectionCount : kSectionCount - 1;
+    for (int section = 0; section < sections; ++section)
     {
         y += kRowTitleSize * 1.2f + units(1.0f);
         for (int row = 0; row < kRows[section]; ++row)
@@ -344,9 +363,9 @@ void App::draw_settings()
     settings_scroll_ = eased(settings_scroll_, wanted, frame_seconds_);
 
     nvgSave(vg_);
-    nvgScissor(vg_, kNavWidth, kTopBarHeight, kScreenWidth - kNavWidth, kScreenHeight - kTopBarHeight);
+    nvgScissor(vg_, kNavWidth, kTopBarHeight, kScreenWidth() - kNavWidth, kScreenHeight() - kTopBarHeight);
     y = kTop - settings_scroll_;
-    for (int section = 0; section < kSectionCount; ++section)
+    for (int section = 0; section < sections; ++section)
     {
         y += heading(left, y, kSections[section]);
         for (int row = 0; row < kRows[section]; ++row)
@@ -385,7 +404,7 @@ void App::draw_settings()
     nvgRestore(vg_);
 
     // Beside the list, what goes with the section the focus is in.
-    const float side = left + width + units(4.0f), side_width = kScreenWidth - side - units(4.0f);
+    const float side = left + width + units(4.0f), side_width = kScreenWidth() - side - units(4.0f);
     float side_top = kTop;
     // It fades out, changes, and fades in as the focus goes from section to section.
     if (settings_side_ != settings_section_)
@@ -408,6 +427,20 @@ void App::draw_settings()
     {
         side_top += heading(side, side_top, "Preview");
         draw_subtitle_sample(side, side_top, side_width, units(9.0f));
+    }
+    else if (settings_side_ == 4)
+    {
+        side_top += heading(side, side_top, "Display");
+        nvgFontFace(vg_, "regular");
+        nvgFontSize(vg_, units(1.1f));
+        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+        nvgFillColor(vg_, foreground(0.6f));
+        nvgTextLineHeight(vg_, 1.4f);
+        nvgTextBox(vg_, side, side_top, side_width,
+                   "The handheld UI makes everything a little larger, for the console's own screen. Switching "
+                   "automatically uses it in the hand and the TV UI when docked.",
+                   nullptr);
+        nvgTextLineHeight(vg_, 1.0f);
     }
     else if (settings_side_ == 3)
     {

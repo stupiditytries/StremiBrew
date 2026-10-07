@@ -212,6 +212,26 @@ int main()
         account.audio_language = "eng";
         account.subtitles_language = "eng";
         app.set_account(account);
+        // Which UI to use (the handheld one, and whether to choose by itself) is kept in
+        // a small file: two whole numbers.
+        static constexpr char kDisplayFile[] = "sdmc:/switch/StremiBrew/display.txt";
+        {
+            int handheld = 0, automatic = 1;
+            if (std::FILE *file = std::fopen(kDisplayFile, "r"))
+            {
+                if (std::fscanf(file, "%d %d", &handheld, &automatic) != 2)
+                    handheld = 0, automatic = 1;
+                std::fclose(file);
+            }
+            app.set_display_options(handheld != 0, automatic != 0);
+        }
+        app.set_display_handler([](bool handheld, bool automatic) {
+            if (std::FILE *file = std::fopen(kDisplayFile, "w"))
+            {
+                std::fprintf(file, "%d %d\n", handheld ? 1 : 0, automatic ? 1 : 0);
+                std::fclose(file);
+            }
+        });
         // Discover is given the board's titles, so that screen has something too.
         ui::DiscoverData discover;
         discover.types = {{"Movie", true}, {"Series", false}};
@@ -242,6 +262,7 @@ int main()
                 was_docked = docked;
             }
 
+            app.set_docked(docked);
             pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
 
             // The picture shown is the window's top left; OpenGL counts rows from the bottom.
