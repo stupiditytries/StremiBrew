@@ -28,6 +28,5 @@
   "target-family": [
     "unix"
   ],
-  "has-thread-local": true,
   "exe-suffix": ".elf"
 }

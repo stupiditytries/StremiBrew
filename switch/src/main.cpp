@@ -39,6 +39,8 @@ constexpr int kDockedWidth = 1920, kDockedHeight = 1080;
 constexpr int kHandheldWidth = 1280, kHandheldHeight = 720;
 } // namespace
 
+void watch_for_endings(); // crash_log.cpp
+
 void log_line(const char *format, ...)
 {
     char text[512];
@@ -67,6 +69,7 @@ std::size_t stremio_core_last_error(char *out, std::size_t capacity);
 // network, and write what came back to the log.
 static void try_core()
 {
+    log_line("core trial: begun");
     mkdir("sdmc:/switch/StremiBrew/core", 0777);
     const Result network = socketInitializeDefault();
     log_line("core trial: network %s (0x%x)", R_SUCCEEDED(network) ? "ready" : "not available", network);
@@ -229,6 +232,7 @@ int main()
     mkdir(kDataFolder, 0777);
     std::remove(kLogFile);
     log_line("start");
+    watch_for_endings();
     const Result files = romfsInit();
     if (R_FAILED(files))
         log_line("the app's own files did not open (0x%x)", files);
