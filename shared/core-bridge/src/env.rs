@@ -52,6 +52,14 @@ fn blocking<T: Send + 'static>(
     receiver.map(|result| result.map_err(|_| EnvError::Other("worker stopped".to_owned())))
 }
 
+/// Moves a finished file into place, over whatever is there.
+pub(crate) fn put_in_place(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    // The Switch's file system will not rename onto a file that exists.
+    #[cfg(target_os = "horizon")]
+    let _ = std::fs::remove_file(to);
+    std::fs::rename(from, to)
+}
+
 /// Downloads `url` into the file `path` on the network pool. The bytes are written
 /// beside the target and renamed into place, so a reader never sees half a file. A failed
 /// download leaves no file. Used for poster images.
@@ -69,7 +77,7 @@ pub(crate) fn fetch_to_file(url: String, path: PathBuf) {
             }
             let temporary = path.with_extension("part");
             std::fs::write(&temporary, &bytes).ok()?;
-            std::fs::rename(&temporary, &path).ok()
+            put_in_place(&temporary, &path).ok()
         })();
         if saved.is_none() {
             if let Ok(mut failed) = FAILED_DOWNLOADS.lock() {
@@ -176,7 +184,11 @@ impl Env for Ps5Env {
                 Err(ureq::Error::Status(code, _)) => {
                     return Err(EnvError::Fetch(format!("Unexpected HTTP status code {code}")))
                 }
-                Err(error) => return Err(EnvError::Fetch(error.to_string())),
+                Err(error) => {
+                    #[cfg(target_os = "horizon")]
+                    crate::horizon::note_failure(&parts.uri.to_string(), &error.to_string());
+                    return Err(EnvError::Fetch(error.to_string()));
+                }
             };
             let mut deserializer = serde_json::Deserializer::from_reader(response.into_reader());
             OUT::deserialize(&mut deserializer).map_err(|error| EnvError::Fetch(error.to_string()))
@@ -206,7 +218,7 @@ impl Env for Ps5Env {
                 // Written beside the target and renamed, so a crash cannot leave half a file.
                 let temporary = path.with_extension("tmp");
                 std::fs::write(&temporary, bytes)
-                    .and_then(|_| std::fs::rename(&temporary, &path))
+                    .and_then(|_| put_in_place(&temporary, &path))
                     .map_err(|error| EnvError::StorageWriteError(error.to_string()))
             }
             None => match std::fs::remove_file(&path) {

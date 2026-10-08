@@ -139,6 +139,17 @@ class App
     // and whether it is chosen automatically (in the hand yes, docked no). The host says
     // whether the console is docked, and saves the two choices when they change.
     void set_display_options(bool handheld_ui, bool automatic);
+    // What the host can do. Settings leaves out what a host cannot: the trailers switch
+    // where there are no trailers, auto-calibrate where there is no speech recognition.
+    struct Features
+    {
+        bool trailers = true;
+        bool calibration = true;
+    };
+    void set_features(const Features &features)
+    {
+        features_ = features;
+    }
     void set_display_handler(std::function<void(bool handheld_ui, bool automatic)> handler);
     void set_docked(bool docked)
     {
@@ -271,6 +282,7 @@ class App
     std::size_t focus_mark() const;
     void draw_settings();
     void press_settings(Button button);
+    int settings_rows(int section) const;
     void change_setting(int section, int row, int step);
     void press_setting(int section, int row);
     std::string setting_value(int section, int row) const;
@@ -358,6 +370,7 @@ class App
     bool discover_named_ = false;   // its name is written out: it has no logo
     // Going to another tab brings its screen in with a short fade and rise; in Settings,
     // what is beside the list fades from one section's to the next's.
+    Features features_;
     bool display_options_ = false, handheld_ui_ = false, handheld_auto_ = true, docked_ = true;
     std::function<void(bool, bool)> display_handler_;
     // Whether the handheld UI is the one in use now.

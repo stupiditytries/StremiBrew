@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds the app for the Switch as an .nro. Run in Git Bash on Windows, with devkitPro's
-# devkitA64, libnx and the Switch portlibs (mesa, glad, libdrm_nouveau) installed.
+# devkitA64, libnx and the Switch portlibs (mesa, glad, libdrm_nouveau, ffmpeg) installed,
+# after switch/rust/build.sh (inside WSL) has built the core bridge.
 #   DEVKITPRO_WIN  the devkitPro folder (default C:/devkitPro; the DEVKITPRO variable its
 #                  installer sets is a path of its own shell's, no use here)
 #   OUT        where the build goes (default build/switch in this repository)
@@ -19,16 +20,18 @@ arch=(-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE)
 # The console's own libraries come first: the UI's third_party folder has the PC
 # preview's OpenGL loader under the same name as the Switch's.
 includes=(-I"$dkp/portlibs/switch/include" -I"$dkp/libnx/include" -I"$ui/src" -I"$ui/third_party/nanovg"
-    -I"$ui/third_party" -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp")
+    -I"$ui/third_party" -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp" -I"$repo/switch/src")
 common=(-g -O2 -ffunction-sections -D__SWITCH__ "${arch[@]}" "${includes[@]}")
-# The core bridge (built by switch/rust/build.sh inside WSL), when it is there.
-core=()
-if [[ -f $out/libstremio_core.a ]]; then
-    common+=(-DWITH_CORE)
-    core=("$out/libstremio_core.a" "$out/libring_asm.a")
-fi
+# The core bridge, and the assembly routines its cryptography wants.
+core=("$out/libstremio_core.a" "$out/libring_asm.a")
+for library in "${core[@]}"; do
+    [[ -f $library ]] || { echo "error: $library is missing: run switch/rust/build.sh in WSL first" >&2; exit 1; }
+done
+# The link between the UI and the core is the PS5 app's, used where it lies (its header
+# is found through this file's folder, which is searched last).
+link=$repo/ps5/app/src/core_link.cpp
 
-sources=("$repo"/switch/src/*.cpp "$repo"/switch/src/*.c "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c")
+sources=("$repo"/switch/src/*.cpp "$repo"/switch/src/*.c "$link" "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c")
 while IFS= read -r file; do
     sources+=("$file")
 done < <(find "$ui/third_party/libwebp/src/dec" "$ui/third_party/libwebp/src/dsp" \
@@ -49,7 +52,10 @@ compile() {
     case $source in
         # The one file that asks what an unhandled C++ failure was needs exceptions on.
         */crash_log.cpp) aarch64-none-elf-g++ -std=gnu++20 "${common[@]}" -c "$source" -o "$object" ;;
-        *.cpp) aarch64-none-elf-g++ -std=gnu++20 -fno-rtti -fno-exceptions "${common[@]}" -c "$source" -o "$object" ;;
+        "$link") aarch64-none-elf-g++ -std=gnu++20 -fno-rtti -fno-exceptions "${common[@]}" \
+            -idirafter "$(dirname "$link")" -c "$source" -o "$object" ;;
+        *.cpp) aarch64-none-elf-g++ -std=gnu++20 -fno-rtti -fno-exceptions "${common[@]}" \
+            -idirafter "$repo/ps5/app/src" -c "$source" -o "$object" ;;
         *) aarch64-none-elf-gcc -std=gnu11 "${common[@]}" -c "$source" -o "$object" ;;
     esac
 }
@@ -67,17 +73,17 @@ for source in "${sources[@]}"; do
     objects+=("$object")
 done
 
+# (--wrap: see switch/src/system_fixes.c.)
 aarch64-none-elf-g++ -specs="$dkp/libnx/switch.specs" -g "${arch[@]}" -Wl,-Map,"$out/StremiBrew.map" \
+    -Wl,--wrap=pthread_create -Wl,--wrap=clock_gettime \
     "${objects[@]}" "${core[@]}" -L"$dkp/portlibs/switch/lib" -L"$dkp/libnx/lib" \
+    -lavformat -lavcodec -lswresample -lavutil -ldav1d -lbz2 -lz \
     -lglad -lEGL -lglapi -ldrm_nouveau -lnx -lm -o "$out/StremiBrew.elf"
 
-# The app's own files: the fonts, and for now the sample data the UI is shown with.
+# The app's own files: the fonts.
+rm -rf "$out/romfs"
+mkdir -p "$out/romfs/fonts"
 cp "$ui"/assets/fonts/*.ttf "$out/romfs/fonts/"
-if [[ -f $repo/build/preview-data/board.json ]]; then
-    cp "$repo/build/preview-data/board.json" "$out/romfs/"
-    mkdir -p "$out/romfs/images"
-    cp -u "$repo"/build/preview-data/images/* "$out/romfs/images/"
-fi
 nacptool --create "StremiBrew" "stupiditytries" "0.1.0" "$out/StremiBrew.nacp"
 elf2nro "$out/StremiBrew.elf" "$out/StremiBrew.nro" --icon="$dkp/libnx/default_icon.jpg" \
     --nacp="$out/StremiBrew.nacp" --romfsdir="$out/romfs"

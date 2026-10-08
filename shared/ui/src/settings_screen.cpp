@@ -106,25 +106,48 @@ void App::press_setting(int section, int row)
         change_setting(section, row, 1);
 }
 
+// How many of a section's settings this host has: none of the ones it has no use for
+// (a section left with none is not shown at all).
+int App::settings_rows(int section) const
+{
+    if (section == 3 && !features_.calibration)
+        return 0;
+    if (section == 4 && !display_options_)
+        return 0;
+    if (section == 1 && !features_.trailers)
+        return kRows[section] - 1; // all but the trailers switch, its last
+    return kRows[section];
+}
+
 void App::press_settings(Button button)
 {
     int &section = settings_section_, &row = settings_row_;
+    // The nearest section in a direction that has settings, or -1.
+    const auto neighbour = [this](int from, int step) {
+        for (int other = from + step; other >= 0 && other < kSectionCount; other += step)
+            if (settings_rows(other) > 0)
+                return other;
+        return -1;
+    };
     if (button == Button::Up)
     {
         if (row > 0)
             --row;
-        else if (section > 0)
-            row = kRows[--section] - 1;
+        else if (const int above = neighbour(section, -1); above >= 0)
+        {
+            section = above;
+            row = settings_rows(section) - 1;
+        }
         else
             zone_ = Zone::Search;
     }
     else if (button == Button::Down)
     {
-        if (row + 1 < kRows[section])
+        if (row + 1 < settings_rows(section))
             ++row;
-        else if (section + 1 < (display_options_ ? kSectionCount : kSectionCount - 1))
+        else if (const int below = neighbour(section, 1); below >= 0)
         {
-            ++section;
+            section = below;
             row = 0;
         }
     }
@@ -341,11 +364,12 @@ void App::draw_settings()
     const float bottom = kScreenHeight() - units(2.0f);
     // Where the focused setting falls in the list, to keep it in view.
     float y = 0, focus_y = 0;
-    const int sections = display_options_ ? kSectionCount : kSectionCount - 1;
-    for (int section = 0; section < sections; ++section)
+    for (int section = 0; section < kSectionCount; ++section)
     {
+        if (settings_rows(section) == 0)
+            continue;
         y += kRowTitleSize * 1.2f + units(1.0f);
-        for (int row = 0; row < kRows[section]; ++row)
+        for (int row = 0; row < settings_rows(section); ++row)
         {
             if (section == settings_section_ && row == settings_row_)
                 focus_y = y;
@@ -365,10 +389,12 @@ void App::draw_settings()
     nvgSave(vg_);
     nvgScissor(vg_, kNavWidth, kTopBarHeight, kScreenWidth() - kNavWidth, kScreenHeight() - kTopBarHeight);
     y = kTop - settings_scroll_;
-    for (int section = 0; section < sections; ++section)
+    for (int section = 0; section < kSectionCount; ++section)
     {
+        if (settings_rows(section) == 0)
+            continue;
         y += heading(left, y, kSections[section]);
-        for (int row = 0; row < kRows[section]; ++row)
+        for (int row = 0; row < settings_rows(section); ++row)
         {
             const bool focused = active && section == settings_section_ && row == settings_row_;
             if (section == 0)

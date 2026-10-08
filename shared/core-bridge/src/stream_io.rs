@@ -559,7 +559,7 @@ pub extern "C" fn stremio_http_download(
             let _ = std::fs::remove_file(&part);
             return Err(format!("the download stopped at {written} of {size} bytes"));
         }
-        std::fs::rename(&part, path).map_err(|error| error.to_string())
+        crate::env::put_in_place(std::path::Path::new(&part), std::path::Path::new(path)).map_err(|error| error.to_string())
     })();
     match fetched {
         Ok(()) => 0,

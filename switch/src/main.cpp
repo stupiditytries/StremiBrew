@@ -1,15 +1,14 @@
-// The app on the Switch. For now: the UI alone, on sample data from the app's own
-// files, to prove the display, the drawing and the controller. The core, the network and
-// the player follow.
+// The app on the Switch: opens the display, starts stremio-core, and runs the UI.
 //
-// What it has to say goes to sdmc:/switch/StremiBrew/log.txt.
+// What it has to say goes to sdmc:/switch/StremiBrew/log.txt (and, if it dies, what it
+// died of: see crash_log.cpp).
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <sstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,27 +26,58 @@
 #include "nanovg_gl.h"
 
 #include "app.hpp"
-#include "board_data.hpp"
+#include "core_link.hpp"
+#include "video_test.hpp"
+
+extern "C"
+{
+std::int32_t stremio_core_init(const char *storage_dir);
+std::size_t stremio_core_last_error(char *out, std::size_t capacity);
+std::int32_t stremio_core_fetch_file(const char *url, const char *path);
+bool stremio_core_fetch_failed(const char *url);
+std::size_t stremio_core_trim_folder(const char *folder, std::uint64_t limit);
+void stremio_core_sign_in_start(void);
+void stremio_core_sign_in_cancel(void);
+void stremio_core_sign_out(void);
+std::int32_t stremio_core_load_details(const char *type, const char *id, const char *video);
+void stremio_core_set_languages(const char *audio, const char *subtitles);
+std::int32_t stremio_core_library_set(const char *id, bool add);
+void stremio_core_forget_progress(const char *id);
+void stremio_core_calendar_load(std::int32_t year, std::uint32_t month);
+void stremio_core_discover_choose(std::int32_t kind, std::uint32_t index);
+
+// system_fixes.c
+void clock_check_against_network(void);
+// The bridge's lines for the log (see the bridge's horizon.rs).
+void stremio_host_log(const char *text);
+}
+
+void watch_for_endings(); // crash_log.cpp
 
 namespace
 {
 constexpr char kDataFolder[] = "sdmc:/switch/StremiBrew";
 constexpr char kLogFile[] = "sdmc:/switch/StremiBrew/log.txt";
+constexpr char kStorageFolder[] = "sdmc:/switch/StremiBrew/core";
+constexpr char kImageFolder[] = "sdmc:/switch/StremiBrew/images";
+constexpr char kDisplayFile[] = "sdmc:/switch/StremiBrew/display.txt";
+constexpr char kSubtitleStyleFile[] = "sdmc:/switch/StremiBrew/subtitle-style.txt";
 // The window is the size of the television's picture; in the hand, the top left of it
 // that the console's own screen shows is drawn into instead.
 constexpr int kDockedWidth = 1920, kDockedHeight = 1080;
 constexpr int kHandheldWidth = 1280, kHandheldHeight = 720;
 } // namespace
 
-void watch_for_endings(); // crash_log.cpp
-
 void log_line(const char *format, ...)
 {
-    char text[512];
+    // One line at a time, whichever thread it comes from.
+    static std::mutex writing;
+    char text[768];
     va_list arguments;
     va_start(arguments, format);
     std::vsnprintf(text, sizeof text, format, arguments);
     va_end(arguments);
+    const std::lock_guard lock{writing};
     if (std::FILE *log = std::fopen(kLogFile, "a"))
     {
         std::fprintf(log, "%s\n", text);
@@ -55,61 +85,10 @@ void log_line(const char *format, ...)
     }
 }
 
-#ifdef WITH_CORE
-extern "C"
+void stremio_host_log(const char *text)
 {
-std::int32_t stremio_core_init(const char *storage_dir);
-std::int32_t stremio_core_load_board(std::uint32_t rows);
-std::size_t stremio_core_poll_event(char *out, std::size_t capacity);
-std::size_t stremio_core_board_summary(char *out, std::size_t capacity);
-std::size_t stremio_core_last_error(char *out, std::size_t capacity);
-std::size_t stremio_debug_path(const char *path, char *out, std::size_t capacity);
+    log_line("%s", text);
 }
-
-// A first trial of the core on this console: start it, ask for the board over the
-// network, and write what came back to the log.
-static void try_core()
-{
-    log_line("core trial: begun");
-    mkdir("sdmc:/switch/StremiBrew/core", 0777);
-    const Result network = socketInitializeDefault();
-    log_line("core trial: network %s (0x%x)", R_SUCCEEDED(network) ? "ready" : "not available", network);
-    // Do the C library and Rust agree about a folder and a file?
-    for (const char *path : {"sdmc:/switch/StremiBrew/core", "sdmc:/switch/StremiBrew/log.txt", "sdmc:/switch"})
-    {
-        struct stat seen{};
-        const int result = stat(path, &seen);
-        char rust[200] = {};
-        stremio_debug_path(path, rust, sizeof rust);
-        log_line("core trial: %s: C says result %d, mode 0x%x, %lld bytes; Rust says %s", path, result,
-                 static_cast<unsigned>(seen.st_mode), static_cast<long long>(seen.st_size), rust);
-    }
-    if (stremio_core_init("sdmc:/switch/StremiBrew/core") != 0)
-    {
-        char error[256] = {};
-        stremio_core_last_error(error, sizeof error);
-        log_line("core trial: the core did not start: %s", error);
-        return;
-    }
-    log_line("core trial: core started");
-    stremio_core_load_board(6);
-    static char text[1 << 16];
-    for (int second = 1; second <= 20; ++second)
-    {
-        svcSleepThread(1'000'000'000ull);
-        int events = 0;
-        while (stremio_core_poll_event(text, sizeof text) != 0)
-            ++events;
-        const std::size_t length = stremio_core_board_summary(text, sizeof text);
-        text[length < sizeof text ? length : 0] = 0;
-        // The first line is the totals, the rest one line per row: all of it now and
-        // then, the totals alone in between.
-        if (char *end = std::strchr(text, 10); end != nullptr && second % 5 != 0)
-            *end = 0;
-        log_line("core trial, %d s, %d events: %s", second, events, text);
-    }
-}
-#endif
 
 namespace
 {
@@ -166,7 +145,8 @@ struct Display
 };
 
 // The controller as UI button presses: directions (the pad's and either stick's) repeat
-// while held; A accepts and B goes back, as on the console itself.
+// while held; A accepts and B goes back, as on the console itself; L and R step back and
+// forward; Plus is the options button.
 class Pad
 {
   public:
@@ -223,17 +203,35 @@ class Pad
     float repeat_in_ = 0;
 };
 
-std::string read_file(const char *path)
-{
-    std::ifstream file{path, std::ios::binary};
-    std::ostringstream text;
-    text << file.rdbuf();
-    return text.str();
-}
-
 double seconds_now()
 {
     return static_cast<double>(armTicksToNs(armGetSystemTick())) / 1e9;
+}
+
+// The console's own keyboard, for typing a search. It takes the screen until it is
+// closed. Returns 1 with what was typed, 0 when it was closed without, and -1 when the
+// console would not open it at all.
+int ask_keyboard(const std::string &text, std::string &typed)
+{
+    SwkbdConfig keyboard;
+    const Result made = swkbdCreate(&keyboard, 0);
+    if (R_FAILED(made))
+    {
+        log_line("keyboard: the console's keyboard is not to be had (0x%x)", made);
+        return -1;
+    }
+    swkbdConfigMakePresetDefault(&keyboard);
+    swkbdConfigSetGuideText(&keyboard, "Search");
+    swkbdConfigSetOkButtonText(&keyboard, "Search");
+    swkbdConfigSetInitialText(&keyboard, text.c_str());
+    swkbdConfigSetStringLenMax(&keyboard, 60);
+    char out[256] = {};
+    const Result shown = swkbdShow(&keyboard, out, sizeof out);
+    swkbdClose(&keyboard);
+    if (R_FAILED(shown))
+        return 0;
+    typed = out;
+    return 1;
 }
 } // namespace
 
@@ -241,6 +239,7 @@ int main()
 {
     mkdir("sdmc:/switch", 0777);
     mkdir(kDataFolder, 0777);
+    mkdir(kImageFolder, 0777);
     std::remove(kLogFile);
     log_line("start");
     watch_for_endings();
@@ -260,30 +259,133 @@ int main()
         return 1;
     }
     log_line("drawing ready");
-#ifdef WITH_CORE
-    // (Kept for the life of the app: the console's threads cannot be detached.)
-    static std::thread *trial = new std::thread{try_core};
-    (void)trial;
-#endif
 
     {
-        log_line("making the UI");
-        ui::App app{vg, "romfs:/fonts", "romfs:/images"};
-        log_line("UI made");
-        const std::string board = read_file("romfs:/board.json");
-        std::vector<ui::BoardRow> rows;
-        log_line("sample board: %zu bytes, %s", board.size(), ui::parse_board(board, rows) ? "read" : "not read");
-        app.set_board(rows);
-        ui::Account account;
-        account.signed_in = true;
-        account.email = "sample data";
-        account.addons = 0;
-        account.audio_language = "eng";
-        account.subtitles_language = "eng";
-        app.set_account(account);
+        ui::App app{vg, "romfs:/fonts", kImageFolder};
+        app.set_image_fetcher(
+            [](const std::string &address, const std::string &file) {
+                stremio_core_fetch_file(address.c_str(), file.c_str());
+            },
+            [](const std::string &address) { return stremio_core_fetch_failed(address.c_str()); });
+        // Not on this console (yet): trailers on the home screen, and speech recognition.
+        app.set_features({false, false});
+
+        // Everything asked of the core goes through the link's thread (see core_link.hpp).
+        ps5::CoreLink core;
+        app.set_intent_handler([&core](ui::Intent intent) {
+            core.post([intent] {
+                switch (intent)
+                {
+                case ui::Intent::SignIn:
+                    stremio_core_sign_in_start();
+                    break;
+                case ui::Intent::CancelSignIn:
+                    stremio_core_sign_in_cancel();
+                    break;
+                case ui::Intent::SignOut:
+                    stremio_core_sign_out();
+                    break;
+                }
+            });
+        });
+
+        // Playing a stream is, for now, the plain test player (see video_test.hpp).
+        nx::VideoTest video;
+        app.set_title_handler({
+            [&core](const std::string &type, const std::string &id) {
+                core.post([type, id] { stremio_core_load_details(type.c_str(), id.c_str(), nullptr); });
+            },
+            [&core](const std::string &type, const std::string &id, const std::string &episode) {
+                core.post([type, id, episode] {
+                    stremio_core_load_details(type.c_str(), id.c_str(), episode.c_str());
+                });
+            },
+            [] {},
+            [&video](const ui::Stream &stream, const std::string &title, const std::string &, const std::string &,
+                     const std::string &) {
+                log_line("playing \"%s\" (%llu MB) from %s", title.c_str(),
+                         static_cast<unsigned long long>(stream.size >> 20), stream.addon.c_str());
+                video.open(stream.url);
+            },
+        });
+        {
+            ui::PlayerHandler player;
+            player.set_paused = [&video](bool paused) { video.set_paused(paused); };
+            player.seek = [](double seconds) {
+                log_line("video: asked to go to %.0f s; the test player does not seek", seconds);
+            };
+            player.close = [&video] { video.close(); };
+            player.choose_audio = [](int) {};
+            player.choose_subtitle = [](int) {};
+            player.set_subtitle_delay = [](double) {};
+            player.calibrate = [] {};
+            player.preview = [](double) {};
+            app.set_player_handler(player);
+        }
+
+        // How subtitles look is kept in a small file: four whole numbers.
+        {
+            ui::SubtitleStyle style;
+            if (std::FILE *file = std::fopen(kSubtitleStyleFile, "r"))
+            {
+                ui::SubtitleStyle saved;
+                int bold = 0;
+                if (std::fscanf(file, "%d %d %d %d", &saved.size, &saved.background, &saved.colour, &bold) == 4 &&
+                    saved.size >= 50 && saved.size <= 200 && saved.background >= 0 && saved.background <= 100 &&
+                    saved.colour >= 0 && saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
+                {
+                    saved.bold = bold != 0;
+                    style = saved;
+                }
+                std::fclose(file);
+            }
+            app.set_subtitle_style(style);
+        }
+        app.set_subtitle_style_handler([](const ui::SubtitleStyle &style) {
+            if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
+            {
+                std::fprintf(file, "%d %d %d %d\n", style.size, style.background, style.colour, style.bold ? 1 : 0);
+                std::fclose(file);
+            }
+        });
+
+        app.set_library_handler([&core](ui::LibraryAction action, const ui::BoardItem &item) {
+            const std::string id = item.id;
+            log_line("library: %s %s", action == ui::LibraryAction::Add      ? "add"
+                                       : action == ui::LibraryAction::Remove ? "remove"
+                                                                             : "forget progress of",
+                     id.c_str());
+            core.post([action, id] {
+                if (action == ui::LibraryAction::Forget)
+                    stremio_core_forget_progress(id.c_str());
+                else
+                    stremio_core_library_set(id.c_str(), action == ui::LibraryAction::Add);
+            });
+        });
+        app.set_calendar_handler([&core](int year, int month) {
+            core.post([year, month] { stremio_core_calendar_load(year, static_cast<std::uint32_t>(month)); });
+        });
+        app.set_discover_handler([&core](int kind, int index) {
+            core.post([kind, index] { stremio_core_discover_choose(kind, static_cast<std::uint32_t>(index)); });
+        });
+        app.set_languages_handler([&core](const std::string &audio, const std::string &subtitles) {
+            core.post([audio, subtitles] { stremio_core_set_languages(audio.c_str(), subtitles.c_str()); });
+        });
+
+        // Searches are typed on the console's keyboard. It is asked for between frames
+        // (it takes the screen); if the console will not open it, the app's own is used.
+        bool keyboard_wanted = false, keyboard_there = true;
+        std::string keyboard_text;
+        app.set_keyboard_handler([&](const std::string &text) {
+            if (!keyboard_there)
+                return false;
+            keyboard_wanted = true;
+            keyboard_text = text;
+            return true;
+        });
+
         // Which UI to use (the handheld one, and whether to choose by itself) is kept in
         // a small file: two whole numbers.
-        static constexpr char kDisplayFile[] = "sdmc:/switch/StremiBrew/display.txt";
         {
             int handheld = 0, automatic = 1;
             if (std::FILE *file = std::fopen(kDisplayFile, "r"))
@@ -301,15 +403,44 @@ int main()
                 std::fclose(file);
             }
         });
-        // Discover is given the board's titles, so that screen has something too.
-        ui::DiscoverData discover;
-        discover.types = {{"Movie", true}, {"Series", false}};
-        discover.catalogs = {{"Popular", true}, {"Featured", false}};
-        for (const ui::BoardRow &row : rows)
-            for (const ui::BoardItem &item : row.items)
-                discover.items.push_back(item);
-        app.set_discover(discover);
-        app.set_discover_handler([&app, discover](int, int) { app.set_discover(discover); });
+
+        // The network, the time and the core are brought up beside the first frames
+        // rather than before them (asking the network the time can take seconds).
+        std::thread starting{[&core] {
+            // More room than the console's usual for what arrives (a video is read through
+            // these sockets), and enough sessions for the downloads that run side by side.
+            static const SocketInitConfig sockets = {
+                .tcp_tx_buf_size = 0x8000,
+                .tcp_rx_buf_size = 0x40000,
+                .tcp_tx_buf_max_size = 0x40000,
+                .tcp_rx_buf_max_size = 0x100000,
+                .udp_tx_buf_size = 0x2400,
+                .udp_rx_buf_size = 0xA500,
+                .sb_efficiency = 4,
+                .num_bsd_sessions = 8,
+                .bsd_service_type = BsdServiceType_User,
+            };
+            const Result network = socketInitialize(&sockets);
+            log_line("network %s (0x%x)", R_SUCCEEDED(network) ? "ready" : "not available", network);
+            if (R_SUCCEEDED(network))
+                clock_check_against_network();
+            mkdir(kStorageFolder, 0777);
+            if (stremio_core_init(kStorageFolder) != 0)
+            {
+                char error[256] = {};
+                stremio_core_last_error(error, sizeof error);
+                log_line("core did not start: %s", error);
+                return;
+            }
+            log_line("core started");
+            core.start();
+            core.post([] {
+                // Downloaded artwork is kept between runs up to this size; the oldest goes first.
+                constexpr std::uint64_t kImageFolderLimit = std::uint64_t{300} << 20;
+                const std::size_t trimmed = stremio_core_trim_folder(kImageFolder, kImageFolderLimit);
+                log_line("image folder: removed %zu old files", trimmed);
+            });
+        }};
 
         Pad pad;
         double previous = seconds_now(), slow_logged = 0;
@@ -318,7 +449,8 @@ int main()
         while (appletMainLoop())
         {
             const double frame_start = seconds_now();
-            const float elapsed = static_cast<float>(frame_start - previous);
+            // (A long gap, such as the keyboard leaves, is not animated through.)
+            const float elapsed = std::min(static_cast<float>(frame_start - previous), 0.1f);
             previous = frame_start;
 
             const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
@@ -330,14 +462,59 @@ int main()
                 log_line("%s: drawing at %dx%d", docked ? "docked" : "in the hand", width, height);
                 was_docked = docked;
             }
-
             app.set_docked(docked);
+
+            // Whatever the core's thread has ready is applied between frames. Rows read
+            // for a view the screen has since left are dropped.
+            core.set_view(static_cast<int>(app.view()), app.search_query());
+            std::vector<ui::BoardRow> rows;
+            int rows_view = 0;
+            std::string rows_query;
+            if (core.take_board(rows, rows_view, rows_query) && rows_view == static_cast<int>(app.view()) &&
+                rows_query == app.search_query())
+                app.set_board(std::move(rows));
+            core.set_page(static_cast<int>(app.page()));
+            ui::CalendarMonth month;
+            if (core.take_calendar(month))
+                app.set_calendar(std::move(month));
+            std::vector<ui::Addon> addons;
+            if (core.take_addons(addons))
+                app.set_addons(std::move(addons));
+            ui::DiscoverData discover;
+            if (core.take_discover(discover))
+                app.set_discover(std::move(discover));
+            ui::Details details;
+            if (core.take_details(details))
+                app.set_details(std::move(details));
+            ui::Account account;
+            if (core.take_account(account))
+                app.set_account(std::move(account));
+            core.set_focused_catalog(app.focused_catalog());
+            core.set_title_open(app.title_open());
+
             pad.poll(elapsed, [&](ui::Button button) { app.press(button); });
+            if (keyboard_wanted)
+            {
+                keyboard_wanted = false;
+                std::string typed;
+                const int outcome = ask_keyboard(keyboard_text, typed);
+                if (outcome > 0)
+                    app.submit_search(typed);
+                else if (outcome < 0)
+                    keyboard_there = false; // the app's own keyboard from the next press on
+                previous = seconds_now();
+            }
+            if (app.player_open())
+                app.set_playback(video.status());
+            const double applied = seconds_now();
 
             // The picture shown is the window's top left; OpenGL counts rows from the bottom.
             glViewport(0, kDockedHeight - height, width, height);
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            // A playing video's picture goes under the UI, which then draws only its controls.
+            if (video.active())
+                video.draw(0, kDockedHeight - height, width, height);
             app.update(elapsed);
             app.draw(width, height);
             const double drawn = seconds_now();
@@ -347,14 +524,17 @@ int main()
             if (presented - frame_start > 0.030 && frames > 120 && presented - slow_logged > 1.0)
             {
                 slow_logged = presented;
-                log_line("slow frame: %.0f ms (drawing %.1f, presenting %.1f)", (presented - frame_start) * 1e3,
-                         (drawn - frame_start) * 1e3, (presented - drawn) * 1e3);
+                log_line("slow frame: %.0f ms (data and input %.1f, drawing %.1f, presenting %.1f)",
+                         (presented - frame_start) * 1e3, (applied - frame_start) * 1e3, (drawn - applied) * 1e3,
+                         (presented - drawn) * 1e3);
             }
             if (++frames == 1 || frames == 120 || frames % 3600 == 0)
                 log_line("frame %lu, gl error 0x%x", frames, glGetError());
         }
+        log_line("closing");
+        video.close();
+        starting.join();
     }
-    log_line("closing");
     nvgDeleteGL3(vg);
     display.close();
     romfsExit();
