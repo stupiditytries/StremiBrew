@@ -176,6 +176,11 @@ for name, pattern in definition.items():
     for match in pattern.finditer(text):
         types.setdefault(name, match.group(2))
     text = pattern.sub('', text)
+# What poll() is asked and answers is two short numbers, and its flags are of that type.
+text = re.sub(r'^(pub const POLL\w+): c_int\b', r'\1: c_short', text, flags=re.M)
+for name in CONSTANTS:
+    if name.startswith('POLL'):
+        types[name] = 'c_short'
 text += '\n// The constants the Switch numbers differently from the 3DS (see switch/rust/patch.py).\n'
 for name, value in CONSTANTS.items():
     text += f'pub const {name}: {types.get(name, "c_int")} = {value:#x};\n'

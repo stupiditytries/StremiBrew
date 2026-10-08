@@ -63,6 +63,7 @@ std::int32_t stremio_core_load_board(std::uint32_t rows);
 std::size_t stremio_core_poll_event(char *out, std::size_t capacity);
 std::size_t stremio_core_board_summary(char *out, std::size_t capacity);
 std::size_t stremio_core_last_error(char *out, std::size_t capacity);
+std::size_t stremio_debug_path(const char *path, char *out, std::size_t capacity);
 }
 
 // A first trial of the core on this console: start it, ask for the board over the
@@ -73,6 +74,16 @@ static void try_core()
     mkdir("sdmc:/switch/StremiBrew/core", 0777);
     const Result network = socketInitializeDefault();
     log_line("core trial: network %s (0x%x)", R_SUCCEEDED(network) ? "ready" : "not available", network);
+    // Do the C library and Rust agree about a folder and a file?
+    for (const char *path : {"sdmc:/switch/StremiBrew/core", "sdmc:/switch/StremiBrew/log.txt", "sdmc:/switch"})
+    {
+        struct stat seen{};
+        const int result = stat(path, &seen);
+        char rust[200] = {};
+        stremio_debug_path(path, rust, sizeof rust);
+        log_line("core trial: %s: C says result %d, mode 0x%x, %lld bytes; Rust says %s", path, result,
+                 static_cast<unsigned>(seen.st_mode), static_cast<long long>(seen.st_size), rust);
+    }
     if (stremio_core_init("sdmc:/switch/StremiBrew/core") != 0)
     {
         char error[256] = {};
@@ -250,11 +261,15 @@ int main()
     }
     log_line("drawing ready");
 #ifdef WITH_CORE
-    std::thread{try_core}.detach();
+    // (Kept for the life of the app: the console's threads cannot be detached.)
+    static std::thread *trial = new std::thread{try_core};
+    (void)trial;
 #endif
 
     {
+        log_line("making the UI");
         ui::App app{vg, "romfs:/fonts", "romfs:/images"};
+        log_line("UI made");
         const std::string board = read_file("romfs:/board.json");
         std::vector<ui::BoardRow> rows;
         log_line("sample board: %zu bytes, %s", board.size(), ui::parse_board(board, rows) ? "read" : "not read");

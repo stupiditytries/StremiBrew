@@ -20,6 +20,13 @@ if [[ ! -d $CARGO_HOME ]]; then
     cp -a "$BASE_CARGO" "$CARGO_HOME"
     echo "copied cargo's home to $CARGO_HOME"
 fi
+# The standard library is built against that version too (its own lock file names an
+# older one).
+std_lock=$(ls "$RUSTUP_HOME"/toolchains/*/lib/rustlib/src/rust/library/Cargo.lock)
+if [[ $(python3 "$here/pin-libc.py" "$std_lock" "$here/../../shared/core-bridge/Cargo.lock" $libc_version) == changed ]]; then
+    echo "the standard library now builds against libc $libc_version"
+    rm -rf /root/stremio/target-switch /root/stremio/target-switch-layout
+fi
 # The libc crate is patched from its pristine form every time, and only when the result
 # would differ from what is there (so that nothing is rebuilt for no reason).
 pristine=$(ls -d "$BASE_CARGO"/registry/src/*/libc-$libc_version)

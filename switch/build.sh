@@ -47,6 +47,8 @@ compile() {
         return 0
     fi
     case $source in
+        # The one file that asks what an unhandled C++ failure was needs exceptions on.
+        */crash_log.cpp) aarch64-none-elf-g++ -std=gnu++20 "${common[@]}" -c "$source" -o "$object" ;;
         *.cpp) aarch64-none-elf-g++ -std=gnu++20 -fno-rtti -fno-exceptions "${common[@]}" -c "$source" -o "$object" ;;
         *) aarch64-none-elf-gcc -std=gnu11 "${common[@]}" -c "$source" -o "$object" ;;
     esac

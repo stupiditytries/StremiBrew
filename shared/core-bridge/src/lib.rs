@@ -180,6 +180,25 @@ pub extern "C" fn stremio_core_init(storage_dir: *const c_char) -> i32 {
     }
 }
 
+/// What Rust's standard library makes of a path, as text: a check, when bringing the
+/// bridge up on a new system, that it and the system's C library agree about files.
+#[no_mangle]
+pub extern "C" fn stremio_debug_path(path: *const c_char, out: *mut c_char, capacity: usize) -> usize {
+    let Some(path) = c_str(path) else {
+        return 0;
+    };
+    let text = match std::fs::metadata(path) {
+        Ok(found) => format!(
+            "folder {}, file {}, {} bytes",
+            found.is_dir(),
+            found.is_file(),
+            found.len()
+        ),
+        Err(error) => format!("error: {error}"),
+    };
+    copy_out(&text, out, capacity)
+}
+
 /// Sends an action to the core. `action_json` is an action in the core's own JSON form;
 /// `field_json` names one model field (for example `"board"`) or is null to offer the
 /// action to every model. Returns 0 on success.
