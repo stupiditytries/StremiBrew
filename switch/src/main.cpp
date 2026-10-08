@@ -27,7 +27,7 @@
 
 #include "app.hpp"
 #include "core_link.hpp"
-#include "video_test.hpp"
+#include "play_control.hpp"
 
 extern "C"
 {
@@ -62,6 +62,7 @@ constexpr char kStorageFolder[] = "sdmc:/switch/StremiBrew/core";
 constexpr char kImageFolder[] = "sdmc:/switch/StremiBrew/images";
 constexpr char kDisplayFile[] = "sdmc:/switch/StremiBrew/display.txt";
 constexpr char kSubtitleStyleFile[] = "sdmc:/switch/StremiBrew/subtitle-style.txt";
+constexpr char kQualityFile[] = "sdmc:/switch/StremiBrew/quality.txt";
 // The window is the size of the television's picture; in the hand, the top left of it
 // that the console's own screen shows is drawn into instead.
 constexpr int kDockedWidth = 1920, kDockedHeight = 1080;
@@ -267,8 +268,27 @@ int main()
                 stremio_core_fetch_file(address.c_str(), file.c_str());
             },
             [](const std::string &address) { return stremio_core_fetch_failed(address.c_str()); });
-        // Not on this console (yet): trailers on the home screen, and speech recognition.
-        app.set_features({false, false});
+        // Not on this console: trailers on the home screen (yet), and speech recognition.
+        // Its own: a limit on how much picture a stream may have, which starts at what
+        // the console's screen and its television output can show.
+        app.set_features({false, false, true});
+        {
+            int limit = 1080;
+            if (std::FILE *file = std::fopen(kQualityFile, "r"))
+            {
+                if (std::fscanf(file, "%d", &limit) != 1 || limit < 0 || limit > 4320)
+                    limit = 1080;
+                std::fclose(file);
+            }
+            app.set_quality_limit(limit);
+        }
+        app.set_quality_handler([](int limit) {
+            if (std::FILE *file = std::fopen(kQualityFile, "w"))
+            {
+                std::fprintf(file, "%d\n", limit);
+                std::fclose(file);
+            }
+        });
 
         // Everything asked of the core goes through the link's thread (see core_link.hpp).
         ps5::CoreLink core;
@@ -289,8 +309,7 @@ int main()
             });
         });
 
-        // Playing a stream is, for now, the plain test player (see video_test.hpp).
-        nx::VideoTest video;
+        nx::PlayControl playing{app, core, vg};
         app.set_title_handler({
             [&core](const std::string &type, const std::string &id) {
                 core.post([type, id] { stremio_core_load_details(type.c_str(), id.c_str(), nullptr); });
@@ -301,27 +320,13 @@ int main()
                 });
             },
             [] {},
-            [&video](const ui::Stream &stream, const std::string &title, const std::string &, const std::string &,
-                     const std::string &) {
-                log_line("playing \"%s\" (%llu MB) from %s", title.c_str(),
-                         static_cast<unsigned long long>(stream.size >> 20), stream.addon.c_str());
-                video.open(stream.url);
+            [&playing](const ui::Stream &stream, const std::string &title, const std::string &type,
+                       const std::string &id, const std::string &video) {
+                log_line("playing \"%s\" from %s", title.c_str(), stream.addon.c_str());
+                playing.start(stream, type, id, video);
             },
         });
-        {
-            ui::PlayerHandler player;
-            player.set_paused = [&video](bool paused) { video.set_paused(paused); };
-            player.seek = [](double seconds) {
-                log_line("video: asked to go to %.0f s; the test player does not seek", seconds);
-            };
-            player.close = [&video] { video.close(); };
-            player.choose_audio = [](int) {};
-            player.choose_subtitle = [](int) {};
-            player.set_subtitle_delay = [](double) {};
-            player.calibrate = [] {};
-            player.preview = [](double) {};
-            app.set_player_handler(player);
-        }
+        app.set_player_handler(playing.handler());
 
         // How subtitles look is kept in a small file: four whole numbers.
         {
@@ -504,8 +509,6 @@ int main()
                     keyboard_there = false; // the app's own keyboard from the next press on
                 previous = seconds_now();
             }
-            if (app.player_open())
-                app.set_playback(video.status());
             const double applied = seconds_now();
 
             // The picture shown is the window's top left; OpenGL counts rows from the bottom.
@@ -513,8 +516,7 @@ int main()
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
             // A playing video's picture goes under the UI, which then draws only its controls.
-            if (video.active())
-                video.draw(0, kDockedHeight - height, width, height);
+            playing.frame(width, height);
             app.update(elapsed);
             app.draw(width, height);
             const double drawn = seconds_now();
@@ -532,7 +534,6 @@ int main()
                 log_line("frame %lu, gl error 0x%x", frames, glGetError());
         }
         log_line("closing");
-        video.close();
         starting.join();
     }
     nvgDeleteGL3(vg);

@@ -610,7 +610,11 @@ void DetailsScreen::draw_episode_about(float top, const Episode &episode)
     nvgFontFace(vg_, "regular");
     nvgFontSize(vg_, units(1.1f));
     nvgFillColor(vg_, foreground(0.75f * fade));
-    wrapped_text(vg_, kLeft, top, kAboutWidth, units(1.1f) * 1.5f, 4,
+    // Four lines at most, and fewer on a screen where that many would run into the season
+    // buttons underneath.
+    const float line = units(1.1f) * 1.5f;
+    const int room = static_cast<int>((kSeasonsTop() - units(0.9f) - top) / line);
+    wrapped_text(vg_, kLeft, top, kAboutWidth, line, std::clamp(room, 1, 4),
                  episode.overview.empty() ? details_.description : drawable(episode.overview));
 }
 

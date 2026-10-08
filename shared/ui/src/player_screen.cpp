@@ -95,7 +95,7 @@ void PlayerScreen::set_tracks(PlayerTracks tracks)
 {
     tracks_ = std::move(tracks);
     const int count = static_cast<int>(menu_options().size());
-    menu_focus_ = std::clamp(menu_focus_, -2, std::max(0, count - 1));
+    menu_focus_ = std::clamp(menu_focus_, calibration_available_ ? -2 : -1, std::max(0, count - 1));
 }
 
 const std::vector<TrackOption> &PlayerScreen::menu_options() const
@@ -164,7 +164,7 @@ bool PlayerScreen::press(Button button)
         const int count = static_cast<int>(menu_options().size());
         // The subtitles list has a row above it for their delay, which left and right
         // change a quarter of a second at a time.
-        const int first = menu_ == Menu::Subtitles ? -2 : 0;
+        const int first = menu_ == Menu::Subtitles ? (calibration_available_ ? -2 : -1) : 0;
         if (button == Button::Up && menu_focus_ > first)
             --menu_focus_;
         else if (button == Button::Down && menu_focus_ + 1 < count)
@@ -700,19 +700,22 @@ void PlayerScreen::draw_menu()
             return focused;
         };
         float middle = kMenuTop + row_height / 2;
-        row(-2, kMenuTop);
-        nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-        nvgFontFace(vg_, "medium");
-        nvgFontSize(vg_, units(1.15f));
-        nvgFillColor(vg_, foreground(0.95f));
-        nvgText(vg_, row_left + units(1.2f), middle, "Auto-calibrate", nullptr);
-        nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
-        nvgFontFace(vg_, "regular");
-        nvgFontSize(vg_, units(0.95f));
-        nvgFillColor(vg_, foreground(0.55f));
-        nvgText(vg_, row_left + row_width - units(1.2f), middle, "or hold triangle", nullptr);
+        if (calibration_available_)
+        {
+            row(-2, kMenuTop);
+            nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+            nvgFontFace(vg_, "medium");
+            nvgFontSize(vg_, units(1.15f));
+            nvgFillColor(vg_, foreground(0.95f));
+            nvgText(vg_, row_left + units(1.2f), middle, "Auto-calibrate", nullptr);
+            nvgTextAlign(vg_, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+            nvgFontFace(vg_, "regular");
+            nvgFontSize(vg_, units(0.95f));
+            nvgFillColor(vg_, foreground(0.55f));
+            nvgText(vg_, row_left + row_width - units(1.2f), middle, "or hold triangle", nullptr);
+        }
 
-        const float delay_top = kMenuTop + kMenuRow;
+        const float delay_top = kMenuTop + (calibration_available_ ? kMenuRow : 0.0f);
         middle = delay_top + row_height / 2;
         const bool focused = row(-1, delay_top);
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
@@ -727,7 +730,7 @@ void PlayerScreen::draw_menu()
         nvgFontFace(vg_, "semibold");
         nvgFillColor(vg_, foreground(1.0f));
         nvgText(vg_, row_left + row_width - units(1.2f), middle, shown.c_str(), nullptr);
-        list_top += 2 * kMenuRow + units(0.6f);
+        list_top += (calibration_available_ ? 2.0f : 1.0f) * kMenuRow + units(0.6f);
     }
 
     const std::vector<TrackOption> &options = menu_options();

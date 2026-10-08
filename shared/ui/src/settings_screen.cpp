@@ -26,10 +26,10 @@ namespace
 constexpr const char *kSections[] = {"Account", "Playback", "Subtitles", "Auto-calibrate", "Display"};
 constexpr int kSectionCount = 5;
 // How many settings each section has.
-constexpr int kRows[kSectionCount] = {1, 3, 4, 3, 2};
+constexpr int kRows[kSectionCount] = {1, 4, 4, 3, 2};
 constexpr const char *kLabels[kSectionCount][4] = {
     {"", "", "", ""},
-    {"Audio language", "Subtitles", "Trailers on the home screen", ""},
+    {"Audio language", "Subtitles", "Trailers on the home screen", "Maximum stream quality"},
     {"Size", "Background", "Colour", "Weight"},
     {"Speech model", "Download Status", "Calibration Offset", ""},
     {"Switch UI automatically", "Handheld UI", "", ""},
@@ -57,6 +57,19 @@ void App::change_setting(int section, int row, int step)
     }
     else if (section == 1 && row < 2)
         change_language(row == 1, step);
+    else if (section == 1 && row == 3)
+    {
+        // No limit, then the picture heights streams may have at most.
+        constexpr int kLimits[] = {0, 1080, 720};
+        constexpr int kCount = static_cast<int>(std::size(kLimits));
+        int at = 0;
+        for (int index = 0; index < kCount; ++index)
+            if (kLimits[index] == quality_limit_)
+                at = index;
+        quality_limit_ = kLimits[((at + step) % kCount + kCount) % kCount];
+        if (quality_handler_)
+            quality_handler_(quality_limit_);
+    }
     else if (section == 1)
     {
         trailers_ = !trailers_;
@@ -106,17 +119,29 @@ void App::press_setting(int section, int row)
         change_setting(section, row, 1);
 }
 
-// How many of a section's settings this host has: none of the ones it has no use for
-// (a section left with none is not shown at all).
+// Whether this host has a setting: not the ones it has no use for.
+bool App::setting_shown(int section, int row) const
+{
+    if (row < 0 || row >= kRows[section])
+        return false;
+    if (section == 3)
+        return features_.calibration;
+    if (section == 4)
+        return display_options_;
+    if (section == 1 && row == 2)
+        return features_.trailers;
+    if (section == 1 && row == 3)
+        return features_.quality_limit;
+    return true;
+}
+
+// How many of a section's settings this host has (a section with none is not shown).
 int App::settings_rows(int section) const
 {
-    if (section == 3 && !features_.calibration)
-        return 0;
-    if (section == 4 && !display_options_)
-        return 0;
-    if (section == 1 && !features_.trailers)
-        return kRows[section] - 1; // all but the trailers switch, its last
-    return kRows[section];
+    int count = 0;
+    for (int row = 0; row < kRows[section]; ++row)
+        count += setting_shown(section, row) ? 1 : 0;
+    return count;
 }
 
 void App::press_settings(Button button)
@@ -129,26 +154,33 @@ void App::press_settings(Button button)
                 return other;
         return -1;
     };
+    // The nearest setting of a section in a direction that this host has, or -1.
+    const auto beside = [this](int of, int from, int step) {
+        for (int other = from + step; other >= 0 && other < kRows[of]; other += step)
+            if (setting_shown(of, other))
+                return other;
+        return -1;
+    };
     if (button == Button::Up)
     {
-        if (row > 0)
-            --row;
+        if (const int before = beside(section, row, -1); before >= 0)
+            row = before;
         else if (const int above = neighbour(section, -1); above >= 0)
         {
             section = above;
-            row = settings_rows(section) - 1;
+            row = beside(section, kRows[section], -1);
         }
         else
             zone_ = Zone::Search;
     }
     else if (button == Button::Down)
     {
-        if (row + 1 < settings_rows(section))
-            ++row;
+        if (const int after = beside(section, row, 1); after >= 0)
+            row = after;
         else if (const int below = neighbour(section, 1); below >= 0)
         {
             section = below;
-            row = 0;
+            row = beside(section, -1, 1);
         }
     }
     else if (button == Button::Back || (button == Button::Left && is_button(section, row)))
@@ -172,6 +204,8 @@ std::string App::setting_value(int section, int row) const
         if (row == 1)
             return account_.subtitles_language.empty() ? std::string{"Off"}
                                                        : language_name(account_.subtitles_language);
+        if (row == 3)
+            return quality_limit_ == 0 ? std::string{"No limit"} : std::to_string(quality_limit_) + "p";
         return trailers_ ? "On" : "Off";
     }
     if (section == 2)
@@ -369,8 +403,10 @@ void App::draw_settings()
         if (settings_rows(section) == 0)
             continue;
         y += kRowTitleSize * 1.2f + units(1.0f);
-        for (int row = 0; row < settings_rows(section); ++row)
+        for (int row = 0; row < kRows[section]; ++row)
         {
+            if (!setting_shown(section, row))
+                continue;
             if (section == settings_section_ && row == settings_row_)
                 focus_y = y;
             y += kRowHeight + kSettingGap;
@@ -394,8 +430,10 @@ void App::draw_settings()
         if (settings_rows(section) == 0)
             continue;
         y += heading(left, y, kSections[section]);
-        for (int row = 0; row < settings_rows(section); ++row)
+        for (int row = 0; row < kRows[section]; ++row)
         {
+            if (!setting_shown(section, row))
+                continue;
             const bool focused = active && section == settings_section_ && row == settings_row_;
             if (section == 0)
             {

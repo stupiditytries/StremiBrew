@@ -145,10 +145,24 @@ class App
     {
         bool trailers = true;
         bool calibration = true;
+        // A setting for the most picture a stream may have (see set_quality_limit).
+        bool quality_limit = false;
     };
     void set_features(const Features &features)
     {
         features_ = features;
+        player_->set_calibration_available(features.calibration);
+    }
+    // The tallest picture a stream may have (1080, say; 0 for no limit): streams that say
+    // they have more are left out of a title's list. Set in Settings where the host has
+    // the setting (Features::quality_limit), which saves it when it changes.
+    void set_quality_limit(int height)
+    {
+        quality_limit_ = height;
+    }
+    void set_quality_handler(std::function<void(int height)> handler)
+    {
+        quality_handler_ = std::move(handler);
     }
     void set_display_handler(std::function<void(bool handheld_ui, bool automatic)> handler);
     void set_docked(bool docked)
@@ -283,6 +297,7 @@ class App
     void draw_settings();
     void press_settings(Button button);
     int settings_rows(int section) const;
+    bool setting_shown(int section, int row) const;
     void change_setting(int section, int row, int step);
     void press_setting(int section, int row);
     std::string setting_value(int section, int row) const;
@@ -371,6 +386,8 @@ class App
     // Going to another tab brings its screen in with a short fade and rise; in Settings,
     // what is beside the list fades from one section's to the next's.
     Features features_;
+    int quality_limit_ = 0;
+    std::function<void(int)> quality_handler_;
     bool display_options_ = false, handheld_ui_ = false, handheld_auto_ = true, docked_ = true;
     std::function<void(bool, bool)> display_handler_;
     // Whether the handheld UI is the one in use now.

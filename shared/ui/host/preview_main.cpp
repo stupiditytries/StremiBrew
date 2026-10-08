@@ -276,7 +276,12 @@ int main(int argc, char **argv)
         instance.set_account(account);
         instance.set_intent_handler(on_intent);
         if (handheld)
+        {
+            // As on the Switch: the handheld UI, and the settings that console has.
             instance.set_display_options(true, false);
+            instance.set_features({false, false, true});
+            instance.set_quality_limit(1080);
+        }
         data_folder = std::string{argv[1]};
         data_folder.erase(data_folder.find_last_of("/\\") == std::string::npos
                               ? 0

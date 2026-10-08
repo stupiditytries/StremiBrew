@@ -1,6 +1,7 @@
 #include "app.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -92,8 +93,54 @@ void App::set_title_handler(TitleHandler handler)
     title_handler_ = std::move(handler);
 }
 
+// The picture height a stream says it has ("2160p", "4K", "1080p"), or 0 when it does
+// not say. Add-ons put it in the stream's name or its description.
+static int stream_height(const Stream &stream)
+{
+    struct Mark
+    {
+        const char *text;
+        int height;
+    };
+    constexpr Mark kMarks[] = {{"2160p", 2160}, {"4k", 2160},   {"uhd", 2160},  {"1440p", 1440},
+                               {"1080p", 1080}, {"720p", 720},  {"576p", 576},  {"480p", 480},
+                               {"360p", 360}};
+    const auto letter_or_digit = [](char letter) { return std::isalnum(static_cast<unsigned char>(letter)) != 0; };
+    for (const std::string *source : {&stream.name, &stream.description})
+    {
+        std::string text = *source;
+        for (char &letter : text)
+            letter = static_cast<char>(std::tolower(static_cast<unsigned char>(letter)));
+        // The first mark in the text counts (a file's name can carry others further on).
+        std::size_t first = std::string::npos;
+        int height = 0;
+        for (const Mark &mark : kMarks)
+        {
+            const std::size_t length = std::char_traits<char>::length(mark.text);
+            for (std::size_t at = text.find(mark.text); at != std::string::npos; at = text.find(mark.text, at + 1))
+            {
+                // A mark stands by itself: "4k", not the end of "x264k".
+                const bool starts = at == 0 || !letter_or_digit(text[at - 1]);
+                const bool ends = at + length >= text.size() || !letter_or_digit(text[at + length]);
+                if (starts && ends && at < first)
+                {
+                    first = at;
+                    height = mark.height;
+                }
+            }
+        }
+        if (height != 0)
+            return height;
+    }
+    return 0;
+}
+
 void App::set_details(Details details)
 {
+    // Streams with more picture than Settings allows are left out.
+    if (features_.quality_limit && quality_limit_ > 0)
+        std::erase_if(details.streams,
+                      [this](const Stream &stream) { return stream_height(stream) > quality_limit_; });
     if (title_open_)
         details_->set_details(std::move(details));
     else if (veil_rising_ && details.id == pending_id_)
@@ -598,6 +645,7 @@ std::size_t App::focus_mark() const
     add(static_cast<std::size_t>(calendar_.year * 12 + calendar_.month));
     add(static_cast<std::size_t>(addons_focus_));
     add(static_cast<std::size_t>((handheld_ui_ ? 1 : 0) + (handheld_auto_ ? 2 : 0)));
+    add(static_cast<std::size_t>(quality_limit_));
     add(static_cast<std::size_t>(discover_area_ * 8 + discover_pill_ + (discover_list_open_ ? 64 : 0)));
     add(static_cast<std::size_t>(discover_focus_ * 64 + discover_list_focus_));
     add(static_cast<std::size_t>(speech_.chosen));

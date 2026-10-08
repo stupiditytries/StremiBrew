@@ -127,6 +127,12 @@ class PlayerScreen
     void set_tracks(PlayerTracks tracks);
     void set_subtitle_style(const SubtitleStyle &style);
     void set_hold(float progress);
+    // Whether the host can time subtitles to the dialogue; the subtitles list offers it
+    // only then.
+    void set_calibration_available(bool available)
+    {
+        calibration_available_ = available;
+    }
     // Returns false for a press that leaves the player (Back).
     bool press(Button button);
     void update(float seconds);
@@ -188,6 +194,7 @@ class PlayerScreen
     // In the subtitles list two rows sit above the list itself: -2 is auto-calibrate,
     // -1 the delay.
     int menu_focus_ = 0;
+    bool calibration_available_ = true;
     float hold_ = 0;         // how far through being held the calibrate button is
     float notice_ = 0;       // 0..1, how visible the calibration notice is
     float notice_stay_ = 0;  // seconds a result has been on screen
