@@ -17,6 +17,8 @@
 
 StremiBrew is a cross-platform, third-party Stremio client that aims to bring the native Stremio TV experience to consoles and builds on it with features only console hardware can handle.
 
+The UI is inspired by my favourite elements of Stremio's official web-based TV interface and its Android TV app.
+
 It currently supports the **PS5** and **Switch**, with features including:
 
 - Stremio account sign-in with a link code, with your library, add-ons and watch progress synced through the official `stremio-core`
