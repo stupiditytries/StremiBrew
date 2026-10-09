@@ -36,9 +36,16 @@ PS4 and Wii U support is planned in the near future.
 ## Demonstration
 
 <p align="center">
-  <img src="docs/images/home.gif" alt="The home screen, with a trailer starting behind the featured title" width="100%">
+  <img src="docs/images/home.gif" alt="The home screen, with a trailer starting behind the featured title" width="49%">
+  <img src="docs/images/episodes.gif" alt="A series' page: seasons, episodes and streams" width="49%">
 </p>
 
 <p align="center">
-  <img src="docs/images/episodes.gif" alt="A series' page: seasons, episodes and streams" width="100%">
+  <img src="docs/images/menu.gif" alt="Moving between the home screen, Discover, Library, Calendar, Add-ons and Settings" width="49%">
+  <img src="docs/images/discover.png" alt="Discover, with a film chosen and its details beside the grid" width="49%">
+</p>
+
+<p align="center">
+  <img src="docs/images/calendar.png" alt="The calendar of upcoming episodes" width="49%">
+  <img src="docs/images/search.png" alt="Search results" width="49%">
 </p>
