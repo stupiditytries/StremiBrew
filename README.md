@@ -66,6 +66,7 @@ PS4 and Wii U support is planned in the near future.
 - **[Stremio](https://www.stremio.com/)**: StremiBrew is a client for Stremio and would not exist without it. Accounts, the library, add-ons, catalogs and watch progress are all handled by Stremio's own open-source [`stremio-core`](https://github.com/Stremio/stremio-core), used under its MIT license. The interface takes after Stremio's web-based TV interface and its Android TV app.
 - **[borealis](https://github.com/natinusala/borealis)** by natinusala, and **[xfangfang's fork of borealis](https://github.com/xfangfang/borealis)**: StremiBrew's interface is drawn with the NanoVG renderer kept in that fork. It is what lets the UI render natively on each console, smoothly and responsively, with no web view in between.
 - **[NanoVG](https://github.com/memononen/nanovg)** by Mikko Mononen, and **[FFmpeg](https://ffmpeg.org/)**, which plays the video.
+- **[しの (@shino_illust)](https://www.instagram.com/shino_illust)**: the artwork behind StremiBrew on the PS5 home screen is their [Stremio Art Contest illustration](https://ibispaint.com/art/995888552/).
 - The 3D models in the picture at the top of this page are credited in [docs/images/CREDITS.md](docs/images/CREDITS.md).
 
 ### Support Stremio

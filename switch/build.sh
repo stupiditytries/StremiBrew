@@ -85,6 +85,6 @@ rm -rf "$out/romfs"
 mkdir -p "$out/romfs/fonts"
 cp "$ui"/assets/fonts/*.ttf "$out/romfs/fonts/"
 nacptool --create "StremiBrew" "stupiditytries" "0.1.0" "$out/StremiBrew.nacp"
-elf2nro "$out/StremiBrew.elf" "$out/StremiBrew.nro" --icon="$dkp/libnx/default_icon.jpg" \
+elf2nro "$out/StremiBrew.elf" "$out/StremiBrew.nro" --icon="$repo/switch/icon.jpg" \
     --nacp="$out/StremiBrew.nacp" --romfsdir="$out/romfs"
 ls -la "$out/StremiBrew.nro"

@@ -155,9 +155,9 @@ rm -rf "$app"
 mkdir -p "$app/sce_sys" "$app/sce_module" "$app/assets/fonts"
 "$tool" self --sign --in "$out/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F
 cp "$REPO/ps5/app/sce_sys/param.json" "$app/sce_sys/"
-# The picture behind the app's tile on the console's home screen (the console wants it
-# twice). The icon is still the template's placeholder.
-cp "$TEMPLATE/sce_sys/icon0.png" "$app/sce_sys/"
+# The app's icon, and the picture behind its tile on the console's home screen (the
+# console wants it twice). No snd0.at9 goes in: the tile has no music of its own.
+cp "$REPO/ps5/app/sce_sys/icon0.png" "$app/sce_sys/"
 cp "$REPO/ps5/app/sce_sys/pic0.dds" "$app/sce_sys/pic0.dds"
 cp "$REPO/ps5/app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds"
 cp "$TEMPLATE/runtime/libc.prx" "$app/sce_module/"
