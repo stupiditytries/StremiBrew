@@ -584,6 +584,11 @@ pub extern "C" fn stremio_core_rows(
                 Some(Loadable::Err(_)) => return None,
                 _ => {}
             }
+            // With nobody signed in the add-ons are Stremio's stock ones, and what their
+            // YouTube channels offer is nothing this app can play: that row is left out.
+            if model.ctx.profile.auth.is_none() && page.request.path.r#type == "channel" {
+                return None;
+            }
             // A row is titled by the catalog's entry in its add-on's manifest.
             let addon = model
                 .ctx
