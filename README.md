@@ -3,10 +3,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml/badge.svg?branch=main" alt="Build status"></a>
-  <img src="https://img.shields.io/badge/Tokens%20Wasted-9%20Kazillion%2B-blueviolet" alt="Tokens Wasted: 9 Kazillion+">
-  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/built%20with-C%2B%2B20%20%7C%20Rust-orange" alt="Built with C++20 and Rust">
+  <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml/badge.svg?branch=main" alt="Build status"></a>&nbsp;
+  <img src="https://img.shields.io/badge/Tokens%20Wasted-9%20Kazillion%2B-blueviolet" alt="Tokens Wasted: 9 Kazillion+">&nbsp;
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>&nbsp;
+  <img src="https://img.shields.io/badge/built%20with-C%2B%2B20%20%7C%20Rust-8B5A2B" alt="Built with C++20 and Rust">
 </p>
 
 <p align="center">
