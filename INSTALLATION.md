@@ -2,7 +2,7 @@
 
 StremiBrew is homebrew. It runs only on a console that can already run homebrew, which is something you'll have to do on your own.
 
-Builds are on the [releases page](https://github.com/stupiditytries/StremiBrew/releases): a zip holding the `PPSA99710` folder for the PS5, and `StremiBrew.nro` for the Switch. To build them yourself, see [BUILD.md](BUILD.md).
+Download the [latest release](https://github.com/stupiditytries/StremiBrew/releases/latest): a zip holding the `PPSA99710` folder for the PS5, and `StremiBrew.nro` for the Switch. To build them yourself, see [BUILD.md](BUILD.md).
 
 ## What you need
 

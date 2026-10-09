@@ -5,7 +5,8 @@ app is made with, on one Windows machine with WSL, and they expect the tools bel
 be where the scripts' variables say. Every path can be changed with the variable named at
 the top of each script.
 
-If you would just like to use the app, see
+If you would just like to use the app, download the
+[latest release](https://github.com/stupiditytries/StremiBrew/releases/latest) and see
 [INSTALLATION.md](INSTALLATION.md).
 
 ## Repo Overview

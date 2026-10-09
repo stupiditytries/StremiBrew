@@ -7,8 +7,9 @@
 //                         sign-in code gets entered elsewhere), S (signed in at once);
 //                         the screen settles between presses
 //     --handheld 1        the Switch's handheld layout and settings
-//     --backdrop, --calibrate, --trailer   see ../MOCKUPS.md, which is the guide to
-//                         making mock-ups with this
+//     --backdrop <soft|light|sharp>   the title page's backdrop
+//     --calibrate <state>, --trailer <file.png>   stand-ins for the subtitle-calibration
+//                         notice and for a trailer playing on the home screen
 //
 // In a window the arrow keys, Enter and Backspace are the buttons, and S plays the part
 // of the sign-in code being entered on another device.

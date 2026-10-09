@@ -3,7 +3,7 @@
 # the pixels that differ: a check that a change meant to leave the television UI alone has.
 #   compare.sh <commit>
 # The earlier version is checked out and built in build/before (a git worktree); the
-# pictures go to build/shots/cmp. See ../MOCKUPS.md.
+# pictures go to build/shots/cmp.
 set -euo pipefail
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 # (Named as this checkout sees it: "HEAD" means this one's, not the worktree's.)
