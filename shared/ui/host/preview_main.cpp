@@ -3,8 +3,12 @@
 //   stremio_preview <board.json> <image cache folder> <font folder> [options]
 //     --shot <file.png>   draw without showing a window, save the last frame and exit
 //     --keys <letters>    button presses to apply first: u d l r (directions), a (accept),
-//                         b (back), s (the sign-in code gets entered elsewhere);
+//                         b (back), o (options), p and n (the shoulder buttons), s (the
+//                         sign-in code gets entered elsewhere), S (signed in at once);
 //                         the screen settles between presses
+//     --handheld 1        the Switch's handheld layout and settings
+//     --backdrop, --calibrate, --trailer   see ../MOCKUPS.md, which is the guide to
+//                         making mock-ups with this
 //
 // In a window the arrow keys, Enter and Backspace are the buttons, and S plays the part
 // of the sign-in code being entered on another device.

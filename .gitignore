@@ -10,5 +10,6 @@
 **/stremio_core_web_bg.wasm
 # Internal planning notes and local build output
 PLAN.md
+/shared/ui/MOCKUPS.md
 /.local/
 /build/
