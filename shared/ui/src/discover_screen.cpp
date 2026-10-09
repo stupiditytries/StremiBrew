@@ -411,7 +411,8 @@ void App::draw_discover()
         const BoardItem &item = discover_shown_;
         const float fade = discover_shown_alpha_ * discover_alpha_;
         const float art_height = kPaneWidth * 9.0f / 16.0f;
-        const float pane_top = kGridTop + kCardPadding;
+        // Beside the grid, starting level with the choices above it.
+        const float pane_top = kTop;
         const Images::Texture art = images_->get(item.background, kArtPixels);
         if (art.state == Images::State::Ready)
         {
@@ -505,7 +506,9 @@ void App::draw_discover()
         nvgFontSize(vg_, units(1.0f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
         nvgFillColor(vg_, foreground(0.65f * fade));
-        y += wrapped_text(vg_, text_x, y, text_width, units(1.6f), 9, drawable(item.description));
+        // (No more lines than there is room for down the screen.)
+        const int lines = std::clamp(static_cast<int>((kScreenHeight() - units(2.6f) - y) / units(1.6f)), 1, 9);
+        y += wrapped_text(vg_, text_x, y, text_width, units(1.6f), lines, drawable(item.description));
         if (item.in_library)
         {
             nvgFontFace(vg_, "medium");

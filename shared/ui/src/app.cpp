@@ -646,6 +646,7 @@ std::size_t App::focus_mark() const
     add(static_cast<std::size_t>(addons_focus_));
     add(static_cast<std::size_t>((handheld_ui_ ? 1 : 0) + (handheld_auto_ ? 2 : 0)));
     add(static_cast<std::size_t>(quality_limit_));
+    add(sound_effects_);
     add(static_cast<std::size_t>(discover_area_ * 8 + discover_pill_ + (discover_list_open_ ? 64 : 0)));
     add(static_cast<std::size_t>(discover_focus_ * 64 + discover_list_focus_));
     add(static_cast<std::size_t>(speech_.chosen));
@@ -673,7 +674,7 @@ void App::press(Button button)
     }
     const std::size_t before = focus_mark();
     apply(button);
-    if (!sound_)
+    if (!sound_ || !sound_effects_)
         return;
     // A press that got nowhere (the end of a row, say) is silent.
     const bool changed = focus_mark() != before;

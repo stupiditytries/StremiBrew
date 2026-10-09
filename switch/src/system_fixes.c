@@ -1,6 +1,10 @@
-// Two things about the console that the rest of the app (the C++, the Rust and FFmpeg
-// alike) should not have to know. Both work by standing in front of a C library function
+// Three things about the console that the rest of the app (the C++, the Rust and FFmpeg
+// alike) should not have to know. Each works by standing in front of a C library function
 // (the linker's --wrap: see build.sh).
+//
+// Names: looking up an address by name fails now and then ("temporary failure") when
+// several lookups are made at once, as they are when the app starts. Here they are made
+// one at a time, and one that fails that way is made again.
 //
 // Threads: one made without saying how much stack it wants gets very little from the
 // console's C library; here it gets a megabyte.
@@ -39,6 +43,25 @@ int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attributes, v
     pthread_attr_setstacksize(&roomy, 1u << 20);
     const int result = __real_pthread_create(thread, &roomy, entry, argument);
     pthread_attr_destroy(&roomy);
+    return result;
+}
+
+int __real_getaddrinfo(const char *name, const char *service, const struct addrinfo *hints,
+                       struct addrinfo **found);
+
+int __wrap_getaddrinfo(const char *name, const char *service, const struct addrinfo *hints,
+                       struct addrinfo **found)
+{
+    static pthread_mutex_t one_at_a_time = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&one_at_a_time);
+    int result = __real_getaddrinfo(name, service, hints, found);
+    for (int again = 0; again < 3 && (result == EAI_AGAIN || result == EAI_FAIL); ++again)
+    {
+        const struct timespec pause = {0, 250 * 1000 * 1000};
+        nanosleep(&pause, NULL);
+        result = __real_getaddrinfo(name, service, hints, found);
+    }
+    pthread_mutex_unlock(&one_at_a_time);
     return result;
 }
 

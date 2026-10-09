@@ -75,7 +75,7 @@ done
 
 # (--wrap: see switch/src/system_fixes.c.)
 aarch64-none-elf-g++ -specs="$dkp/libnx/switch.specs" -g "${arch[@]}" -Wl,-Map,"$out/StremiBrew.map" \
-    -Wl,--wrap=pthread_create -Wl,--wrap=clock_gettime \
+    -Wl,--wrap=pthread_create -Wl,--wrap=clock_gettime -Wl,--wrap=getaddrinfo \
     "${objects[@]}" "${core[@]}" -L"$dkp/portlibs/switch/lib" -L"$dkp/libnx/lib" \
     -lavformat -lavcodec -lswresample -lavutil -ldav1d -lbz2 -lz \
     -lglad -lEGL -lglapi -ldrm_nouveau -lnx -lm -o "$out/StremiBrew.elf"

@@ -67,7 +67,22 @@ fn work() {
             std::thread::sleep(Duration::from_millis(200));
             continue;
         };
-        if let Some(brief) = fetch(&kind, &id) {
+        #[allow(unused_mut)]
+        let mut found = fetch(&kind, &id);
+        // (The Switch's network fails a request now and then that works a moment later.)
+        #[cfg(target_os = "horizon")]
+        for _ in 0..3 {
+            if found.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+            found = fetch(&kind, &id);
+        }
+        #[cfg(target_os = "horizon")]
+        if found.is_none() {
+            crate::horizon::note_failure(&format!("the facts of {id}"), "not to be had from Cinemeta");
+        }
+        if let Some(brief) = found {
             if let Ok(mut briefs) = BRIEFS.lock() {
                 briefs.insert(id, Some(brief));
             }

@@ -21,18 +21,18 @@ using namespace theme;
 
 namespace
 {
-// The last section is offered only where the host has a screen that can be held in the
-// hand (see App::set_display_options).
-constexpr const char *kSections[] = {"Account", "Playback", "Subtitles", "Auto-calibrate", "Display"};
+// (The last section's settings after the first are offered only where the host has a
+// screen that can be held in the hand: see App::set_display_options.)
+constexpr const char *kSections[] = {"Account", "Playback", "Subtitles", "Auto-calibrate", "Interface"};
 constexpr int kSectionCount = 5;
 // How many settings each section has.
-constexpr int kRows[kSectionCount] = {1, 4, 4, 3, 2};
+constexpr int kRows[kSectionCount] = {1, 4, 4, 3, 3};
 constexpr const char *kLabels[kSectionCount][4] = {
     {"", "", "", ""},
     {"Audio language", "Subtitles", "Trailers on the home screen", "Maximum stream quality"},
     {"Size", "Background", "Colour", "Weight"},
     {"Speech model", "Download Status", "Calibration Offset", ""},
-    {"Switch UI automatically", "Handheld UI", "", ""},
+    {"Sound effects", "Switch UI automatically", "Handheld UI", ""},
 };
 
 constexpr float kRowHeight = units(3.25f), kSettingGap = units(0.6f);
@@ -42,10 +42,16 @@ constexpr float kTop = kTopBarHeight + units(1.2f);
 // Moves the setting at (section, row) to its next or previous choice.
 void App::change_setting(int section, int row, int step)
 {
-    if (section == 4)
+    if (section == 4 && row == 0)
+    {
+        sound_effects_ = !sound_effects_;
+        if (subtitle_style_handler_)
+            subtitle_style_handler_(subtitle_style_); // the host saves all of these together
+    }
+    else if (section == 4)
     {
         // Choosing the handheld UI (or not) by hand ends the automatic choosing.
-        if (row == 0)
+        if (row == 1)
             handheld_auto_ = !handheld_auto_;
         else
         {
@@ -127,7 +133,7 @@ bool App::setting_shown(int section, int row) const
     if (section == 3)
         return features_.calibration;
     if (section == 4)
-        return display_options_;
+        return row == 0 || display_options_;
     if (section == 1 && row == 2)
         return features_.trailers;
     if (section == 1 && row == 3)
@@ -196,7 +202,7 @@ std::string App::setting_value(int section, int row) const
 {
     char text[32];
     if (section == 4)
-        return (row == 0 ? handheld_auto_ : handheld_now()) ? "On" : "Off";
+        return (row == 0 ? sound_effects_ : row == 1 ? handheld_auto_ : handheld_now()) ? "On" : "Off";
     if (section == 1)
     {
         if (row == 0)
@@ -494,16 +500,17 @@ void App::draw_settings()
     }
     else if (settings_side_ == 4)
     {
-        side_top += heading(side, side_top, "Display");
+        side_top += heading(side, side_top, "Interface");
         nvgFontFace(vg_, "regular");
         nvgFontSize(vg_, units(1.1f));
         nvgTextAlign(vg_, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
         nvgFillColor(vg_, foreground(0.6f));
         nvgTextLineHeight(vg_, 1.4f);
-        nvgTextBox(vg_, side, side_top, side_width,
-                   "The handheld UI makes everything a little larger, for the console's own screen. Switching "
-                   "automatically uses it in the hand and the TV UI when docked.",
-                   nullptr);
+        std::string about = "Sound effects are the quiet tones as the focus moves and things are chosen.";
+        if (display_options_)
+            about += "\n\nThe handheld UI makes everything a little larger, for the console's own screen. "
+                     "Switching automatically uses it in the hand and the TV UI when docked.";
+        nvgTextBox(vg_, side, side_top, side_width, about.c_str(), nullptr);
         nvgTextLineHeight(vg_, 1.0f);
     }
     else if (settings_side_ == 3)

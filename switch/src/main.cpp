@@ -28,6 +28,7 @@
 #include "app.hpp"
 #include "core_link.hpp"
 #include "play_control.hpp"
+#include "sounds.hpp"
 
 extern "C"
 {
@@ -58,6 +59,7 @@ namespace
 {
 constexpr char kDataFolder[] = "sdmc:/switch/StremiBrew";
 constexpr char kLogFile[] = "sdmc:/switch/StremiBrew/log.txt";
+constexpr char kEarlierLogFile[] = "sdmc:/switch/StremiBrew/log-earlier.txt";
 constexpr char kStorageFolder[] = "sdmc:/switch/StremiBrew/core";
 constexpr char kImageFolder[] = "sdmc:/switch/StremiBrew/images";
 constexpr char kDisplayFile[] = "sdmc:/switch/StremiBrew/display.txt";
@@ -146,8 +148,8 @@ struct Display
 };
 
 // The controller as UI button presses: directions (the pad's and either stick's) repeat
-// while held; A accepts and B goes back, as on the console itself; L and R step back and
-// forward; Plus is the options button.
+// while held; A accepts and B goes back, as on the console itself; L and R (and ZL and ZR)
+// step back and forward; Plus is the options button.
 class Pad
 {
   public:
@@ -174,9 +176,9 @@ class Pad
                 press(ui::Button::Accept);
             if (bits & HidNpadButton_B)
                 press(ui::Button::Back);
-            if (bits & HidNpadButton_L)
+            if (bits & (HidNpadButton_L | HidNpadButton_ZL))
                 press(ui::Button::SkipBack);
-            if (bits & HidNpadButton_R)
+            if (bits & (HidNpadButton_R | HidNpadButton_ZR))
                 press(ui::Button::SkipForward);
             if (bits & HidNpadButton_Plus)
                 press(ui::Button::Options);
@@ -241,7 +243,10 @@ int main()
     mkdir("sdmc:/switch", 0777);
     mkdir(kDataFolder, 0777);
     mkdir(kImageFolder, 0777);
-    std::remove(kLogFile);
+    // The log of the run before this one is kept (one launch does not wipe out what the
+    // last one had to say).
+    std::remove(kEarlierLogFile);
+    std::rename(kLogFile, kEarlierLogFile);
     log_line("start");
     watch_for_endings();
     const Result files = romfsInit();
@@ -328,31 +333,42 @@ int main()
         });
         app.set_player_handler(playing.handler());
 
-        // How subtitles look is kept in a small file: four whole numbers.
+        // How subtitles look and whether the UI makes its sounds are kept in a small file:
+        // five whole numbers.
         {
             ui::SubtitleStyle style;
             if (std::FILE *file = std::fopen(kSubtitleStyleFile, "r"))
             {
                 ui::SubtitleStyle saved;
-                int bold = 0;
-                if (std::fscanf(file, "%d %d %d %d", &saved.size, &saved.background, &saved.colour, &bold) == 4 &&
-                    saved.size >= 50 && saved.size <= 200 && saved.background >= 0 && saved.background <= 100 &&
-                    saved.colour >= 0 && saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
+                int bold = 0, sounds = 1;
+                const int read = std::fscanf(file, "%d %d %d %d %d", &saved.size, &saved.background, &saved.colour,
+                                             &bold, &sounds);
+                if (read >= 4 && saved.size >= 50 && saved.size <= 200 && saved.background >= 0 &&
+                    saved.background <= 100 && saved.colour >= 0 &&
+                    saved.colour < static_cast<int>(std::size(ui::kSubtitleColours)))
                 {
                     saved.bold = bold != 0;
                     style = saved;
                 }
+                if (read >= 5)
+                    app.set_sound_effects(sounds != 0);
                 std::fclose(file);
             }
             app.set_subtitle_style(style);
         }
-        app.set_subtitle_style_handler([](const ui::SubtitleStyle &style) {
+        app.set_subtitle_style_handler([&app](const ui::SubtitleStyle &style) {
             if (std::FILE *file = std::fopen(kSubtitleStyleFile, "w"))
             {
-                std::fprintf(file, "%d %d %d %d\n", style.size, style.background, style.colour, style.bold ? 1 : 0);
+                std::fprintf(file, "%d %d %d %d %d\n", style.size, style.background, style.colour, style.bold ? 1 : 0,
+                             app.sound_effects() ? 1 : 0);
                 std::fclose(file);
             }
         });
+        nx::Sounds sounds;
+        const bool sounds_ready = sounds.start();
+        log_line("sound effects %s", sounds_ready ? "ready" : "not available");
+        if (sounds_ready)
+            app.set_sound_handler([&sounds](ui::Sound sound) { sounds.play(sound); });
 
         app.set_library_handler([&core](ui::LibraryAction action, const ui::BoardItem &item) {
             const std::string id = item.id;
@@ -509,6 +525,7 @@ int main()
                     keyboard_there = false; // the app's own keyboard from the next press on
                 previous = seconds_now();
             }
+            sounds.frame();
             const double applied = seconds_now();
 
             // The picture shown is the window's top left; OpenGL counts rows from the bottom.

@@ -541,6 +541,13 @@ struct Player::Session
     bool audio_done = false;
     bool video_primed = false; // the current serial's first picture is ready
     bool starved = false;      // playing, but there is nothing to play
+    // Running dry is not ended by the first scrap to arrive: playback then waits until
+    // `refill_wanted` seconds have been read (more each time it runs dry again soon
+    // after), so a connection slower than the video gives stretches of play with waits
+    // between them rather than a stutter.
+    bool refilling = false;
+    double refill_wanted = 0, refill_began = 0, flowed_from = 0;
+    int dry_runs = 0;
     bool has_audio = false;
     // The clock: the time in the video (`clock_pts`) that was reached at `clock_at`.
     double clock_pts = 0, clock_at = 0;
@@ -724,6 +731,37 @@ struct Player::Session
             return true;
         return video_packets.size() > kPacketsAhead &&
                (!has_audio || audio_packets.size() > kPacketsAhead);
+    }
+
+    // With `mutex` held: how many seconds of the video have been read and are waiting to
+    // be decoded (of picture or of sound, whichever there is less of).
+    double queued_seconds() const
+    {
+        const auto span = [](const std::deque<PacketItem> &packets, double base) {
+            if (packets.size() < 2)
+                return 0.0;
+            const auto stamp = [](const AVPacket *packet) {
+                return packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
+            };
+            const std::int64_t first = stamp(packets.front().packet), last = stamp(packets.back().packet);
+            // (A file that does not time its packets is taken at 25 of them a second.)
+            if (first == AV_NOPTS_VALUE || last == AV_NOPTS_VALUE)
+                return static_cast<double>(packets.size()) / 25.0;
+            return std::max(0.0, static_cast<double>(last - first) * base);
+        };
+        const double pictures_read = span(video_packets, video_base);
+        return has_audio && audio != nullptr ? std::min(pictures_read, span(audio_packets, audio_base))
+                                             : pictures_read;
+    }
+
+    // With `mutex` held: playback has run dry (at `now`); it waits to be refilled.
+    void begin_refill(double now)
+    {
+        dry_runs = now - flowed_from < 45.0 ? dry_runs + 1 : 1;
+        refill_wanted = dry_runs <= 1 ? 4.0 : dry_runs == 2 ? 10.0 : 20.0;
+        refilling = true;
+        refill_began = now;
+        note("ran dry at %.0f s; waiting until %.0f s have been read", clock_pts, refill_wanted);
     }
 
     // Reader thread: changes the audio track. The audio thread is asked to stand aside
@@ -1084,6 +1122,7 @@ struct Player::Session
         double pcm_pts = 0;            // the time of pcm[played]
         int mine = -1;
         bool drained = false;
+        bool flowing = false; // sound (or without it the clock) has run since the last seek
         double last = now_seconds();
         while (!stop)
         {
@@ -1108,6 +1147,8 @@ struct Player::Session
                 {
                     mine = serial;
                     drained = false;
+                    flowing = false;
+                    refilling = false;
                     pcm.clear();
                     played = 0;
                     if (audio != nullptr)
@@ -1118,6 +1159,24 @@ struct Player::Session
                     wake.wait_for(lock, std::chrono::milliseconds(10));
                     last = now_seconds();
                     continue;
+                }
+                // After running dry, playback waits for a fair amount to have been read
+                // (or for all there is) before it starts again.
+                if (refilling)
+                {
+                    if (reader_done || read_enough() || queued_seconds() >= refill_wanted)
+                    {
+                        refilling = false;
+                        flowed_from = now;
+                        note("playing on after %.1f s of waiting", now - refill_began);
+                    }
+                    else
+                    {
+                        starved = true;
+                        wake.wait_for(lock, std::chrono::milliseconds(20));
+                        last = now_seconds();
+                        continue;
+                    }
                 }
                 // Nothing to decode: the clock runs on its own.
                 const bool silent = audio == nullptr || handle < 0 ||
@@ -1136,8 +1195,16 @@ struct Player::Session
                     // Without sound the clock follows real time, and waits when the
                     // pictures run out before the file does.
                     starved = pictures.empty() && !video_done;
+                    if (starved && flowing && video_packets.empty() && !reader_done)
+                    {
+                        flowing = false;
+                        begin_refill(now);
+                    }
                     if (!starved)
+                    {
                         clock_pts += std::min(elapsed, 0.05);
+                        flowing = true;
+                    }
                     clock_at = now;
                     clock_running = true;
                     wake.wait_for(lock, std::chrono::milliseconds(4));
@@ -1155,6 +1222,13 @@ struct Player::Session
                     else if (!reader_done)
                     {
                         starved = true;
+                        // (Before anything has played, after opening or a seek, this is
+                        // only the wait for the first of the sound, not a running dry.)
+                        if (flowing)
+                        {
+                            flowing = false;
+                            begin_refill(now);
+                        }
                         wake.wait_for(lock, std::chrono::milliseconds(10));
                         continue;
                     }
@@ -1229,6 +1303,7 @@ struct Player::Session
                     clock_at = now_seconds();
                     clock_running = true;
                     starved = false;
+                    flowing = true;
                 }
             }
             played += kAudioGrain * 2;

@@ -192,6 +192,16 @@ class App
     }
     void set_intent_handler(std::function<void(Intent)> handler);
     void set_sound_handler(std::function<void(Sound)> handler);
+    // Whether those sounds are played (a Settings switch; the host saves it along with
+    // how subtitles look).
+    bool sound_effects() const
+    {
+        return sound_effects_;
+    }
+    void set_sound_effects(bool on)
+    {
+        sound_effects_ = on;
+    }
     // The video player. It opens when a stream is chosen (TitleHandler::play starts the
     // host's player); while it is open the host draws the picture and the app draws only
     // the controls over it, from what the host reports with set_playback.
@@ -325,6 +335,7 @@ class App
     std::string title_type_, title_id_;
     std::function<void(Intent)> intent_;
     std::function<void(Sound)> sound_;
+    bool sound_effects_ = true;
     std::function<void(LibraryAction, const BoardItem &)> library_handler_;
     std::function<bool(const std::string &)> keyboard_handler_;
     // Search: the words in the search bar, and the ones searched for. Going from one set
