@@ -3,6 +3,11 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/stupiditytries/StremiBrew/build.yml?branch=main&label=build" alt="Build status"></a>
+  <img src="https://img.shields.io/badge/Tokens%20Wasted-1%20Trillion%2B-blueviolet" alt="Tokens Wasted: 1 Trillion+">
+</p>
+
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/stremibrew-dark.png">
     <img src="docs/images/stremibrew-light.png" alt="StremiBrew on a TV and a Nintendo Switch" width="100%">

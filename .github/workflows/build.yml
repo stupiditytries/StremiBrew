@@ -1,0 +1,17 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-bridge:
+    # The console apps need their own SDKs; this checks the part that builds anywhere:
+    # stremio-core and the C bridge the apps link.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the core bridge
+        working-directory: shared/core-bridge
+        run: cargo check --locked --lib --examples
