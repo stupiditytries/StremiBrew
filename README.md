@@ -67,7 +67,7 @@ PS4 and Wii U support is planned in the near future.
 - **[borealis](https://github.com/natinusala/borealis)** by natinusala, and **[xfangfang's fork of borealis](https://github.com/xfangfang/borealis)**: StremiBrew's interface is drawn with the NanoVG renderer kept in that fork. It is what lets the UI render natively on each console, smoothly and responsively, with no web view in between.
 - **[NanoVG](https://github.com/memononen/nanovg)** by Mikko Mononen, and **[FFmpeg](https://ffmpeg.org/)**, which plays the video.
 - **[しの (@shino_illust)](https://www.instagram.com/shino_illust)**: the artwork behind StremiBrew on the PS5 home screen is their [Stremio Art Contest illustration](https://ibispaint.com/art/995888552/).
-- The 3D models in the picture at the top of this page are credited in [docs/images/CREDITS.md](docs/images/CREDITS.md).
+- The artwork in the pictures on this page comes from [Blender Studio's open movies](https://studio.blender.org/films/) (© Blender Foundation, CC BY), NASA/ESA/CSA/STScI imagery and public-domain films. These, and the 3D models in the picture at the top, are credited in [docs/images/CREDITS.md](docs/images/CREDITS.md).
 
 ### Support Stremio
 
@@ -81,7 +81,7 @@ All contributions and support should go to the Stremio team, whose work this is 
 - **Unofficial**: StremiBrew is a third-party project. It is not affiliated with, endorsed by or supported by Stremio, Sony Interactive Entertainment or Nintendo. All names, logos and trademarks belong to their owners. Please do not ask the Stremio team for help with it.
 - **No content**: StremiBrew does not host, provide, index or link to any film, series or other media, and includes no third-party add-ons. It only shows what the add-ons on your own Stremio account return. What you install and what you watch are your responsibility, and so is following the law where you live.
 - **Torrents are not supported**: StremiBrew has no torrent client, and at this period of time I do not plan to add one. Torrent and magnet streams cannot be played and are marked as such; only direct HTTP and HTTPS streams play.
-- **Artwork**: Posters, logos and stills in the screenshots above belong to their owners and are shown only to demonstrate the app.
+- **Artwork**: The posters, logos and stills in the pictures above are freely licensed or in the public domain (see [the credits](docs/images/CREDITS.md)). The titles, ratings and release dates shown are sample data.
 - **Homebrew**: StremiBrew runs only on consoles that can already run homebrew. It contains no code from Sony or Nintendo and does nothing to enable piracy of games. Use it at your own risk: it comes with no warranty, as set out in the [license](LICENSE.md).
 
 I am not responsible or liable for any use of this app, for account or console bans, or for any other risk that comes with using it.
