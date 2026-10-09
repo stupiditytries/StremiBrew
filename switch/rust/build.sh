@@ -13,6 +13,8 @@ dkp=${DEVKITPRO_WSL:-/mnt/c/devkitPro}
 export CC_aarch64_nintendo_switch=clang-18 CXX_aarch64_nintendo_switch=clang++-18
 export AR_aarch64_nintendo_switch=llvm-ar-18
 export CFLAGS_aarch64_nintendo_switch="--target=aarch64-none-elf -march=armv8-a+crc+crypto -mtune=cortex-a57 -fPIE -D__SWITCH__ -isystem $dkp/devkitA64/aarch64-none-elf/include -isystem $dkp/libnx/include"
+# Where this repository is on the building machine is kept out of what gets built.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$(cd "$here/../.." && pwd)=."
 cd "$here/../../shared/core-bridge"
 CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-/root/stremio/target-switch} cargo build --release --lib \
     --target "$here/aarch64-nintendo-switch.json" -Zbuild-std=std,panic_abort -Zjson-target-spec 2>&1 |

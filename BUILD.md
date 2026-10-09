@@ -75,9 +75,6 @@ bash ps5/app/build.sh
 The result is an app folder at `$WORK/app/dist/PPSA99710` (`WORK` defaults to
 `/root/stremio`), holding `eboot.bin`, `sce_sys`, `sce_module` and `assets`.
 
-The other folders under `ps5` (`spike-app`, `core-app`, `bench-app`, `web-app`) are the
-small test apps the port was worked out with. They are not needed to build StremiBrew.
-
 ## Switch
 
 Built in two halves, because the Rust side is built in WSL and the rest with devkitPro on

@@ -21,7 +21,8 @@ arch=(-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE)
 # preview's OpenGL loader under the same name as the Switch's.
 includes=(-I"$dkp/portlibs/switch/include" -I"$dkp/libnx/include" -I"$ui/src" -I"$ui/third_party/nanovg"
     -I"$ui/third_party" -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp" -I"$repo/switch/src")
-common=(-g -O2 -ffunction-sections -D__SWITCH__ "${arch[@]}" "${includes[@]}")
+# (Where this repository is on the building machine is kept out of what gets built.)
+common=(-g -O2 -ffunction-sections -D__SWITCH__ -ffile-prefix-map="$(cygpath -m "$repo")"=. "${arch[@]}" "${includes[@]}")
 # The core bridge, and the assembly routines its cryptography wants.
 core=("$out/libstremio_core.a" "$out/libring_asm.a")
 for library in "${core[@]}"; do

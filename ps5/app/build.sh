@@ -28,8 +28,12 @@ printf '#!/bin/sh\nPS5_PAYLOAD_SDK=%s exec sh %s/tooling/prospero-clang18 "$@"\n
     "$sdk" "$TEMPLATE" > "$WORK/bin/ps5-cc"
 chmod +x "$WORK/bin/ps5-cc"
 
-# 1. The core bridge (Rust). See ps5/spike-app/build.sh for the reason behind each setting.
-export RUSTFLAGS='--cfg libc_unstable_freebsd_version="11"'
+# 1. The core bridge (Rust). The console's kernel is FreeBSD 11: file status, directory
+#    entries and kernel events use the layouts from before FreeBSD 12, which the libc crate
+#    has to be told. C and assembly inside crates (the TLS library's cryptography) are
+#    compiled with the SDK's compiler settings. Where this repository is on the building
+#    machine is kept out of what gets built (here and for the C and C++ below).
+export RUSTFLAGS="--cfg libc_unstable_freebsd_version=\"11\" --remap-path-prefix=$REPO=."
 bash "$REPO/ps5/patch-rust-src.sh"
 export CC_x86_64_ps5_freebsd=$WORK/bin/ps5-cc AR_x86_64_ps5_freebsd=llvm-ar-18
 (cd "$REPO/shared/core-bridge" && CARGO_TARGET_DIR=$WORK/target-bridge cargo build --release \
@@ -49,9 +53,9 @@ includes=(-I"$ui/src" -I"$ui/third_party/nanovg" -I"$ui/third_party"
     -I"$ui/third_party/libwebp/src" -I"$ui/third_party/libwebp"
     -I"$GL_SDK/include" -I"$ffmpeg/include" -I"$WHISPER/include" -I"$WHISPER/ggml/include"
     -DGL_GLEXT_PROTOTYPES=1)
-common=(-O2 -ffunction-sections -fdata-sections "${includes[@]}")
+common=(-O2 -ffunction-sections -fdata-sections -ffile-prefix-map="$REPO"=. "${includes[@]}")
 sources=("$REPO"/ps5/app/src/*.cpp "$ui"/src/*.cpp "$ui/third_party/nanovg/nanovg.c"
-    "$REPO"/ps5/spike-app/src/compat*.c "$REPO/ps5/runtime/heap.c" "$REPO/ps5/runtime/abort.cpp"
+    "$REPO"/ps5/app/compat/compat*.c "$REPO/ps5/runtime/heap.c" "$REPO/ps5/runtime/abort.cpp"
     "$REPO/ps5/runtime/no_exec.c"
     "$TEMPLATE/tooling/native/app_crt.cpp")
 sources+=("$WHISPER/src/whisper.cpp" "$WHISPER"/ggml/src/ggml.c "$WHISPER"/ggml/src/ggml-alloc.c
@@ -122,7 +126,7 @@ cp "$sdk"/target/lib/*.so "$GL_SDK/lib/libSceAgc.so" "$GL_SDK/lib/libSceAgcDrive
     --defsym=__dlclose=0 --defsym=__dlerror=0 \
     -L "$sdk/target/lib" -L "$GL_SDK/lib" \
     -T "$TEMPLATE/tooling/native/ps5-pie.ld" -T "$REPO/ps5/app/unwind.ld" \
-    --eh-frame-hdr --gc-sections --version-script "$REPO/ps5/spike-app/app-symbols.map" \
+    --eh-frame-hdr --gc-sections --version-script "$REPO/ps5/app/app-symbols.map" \
     -e _start -u ps5_agc_gate2_run --error-limit=40 -Map="$out/llvm-pie.map" \
     --why-extract="$out/why-extract.txt" \
     -o "$out/llvm-pie.elf" "${objects[@]}" \
