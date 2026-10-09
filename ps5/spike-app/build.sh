@@ -4,7 +4,7 @@
 #   WORK   build area on the WSL disk
 #   TEMPLATE  checkout of ps5-native-app-boilerplate (provides the SDK and packaging tool)
 set -euo pipefail
-REPO=${REPO:-/path/to/StremiBrew}
+REPO=${REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}
 WORK=${WORK:-/root/stremio}
 TEMPLATE=${TEMPLATE:-/root/eden/ps5-native-app-boilerplate}
 TITLE_ID=${TITLE_ID:-PPSA99701}

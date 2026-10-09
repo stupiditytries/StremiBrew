@@ -31,7 +31,7 @@ It currently supports the **PS5** and **Switch**, with features including:
 - Stremio account sign-in with a link code, with your library, add-ons and watch progress synced through the official `stremio-core`
 - Trailers that play automatically on the home screen as you move between titles (PS5)
 - Home board, Discover, Library, Calendar, Add-ons and search with the console's on-screen keyboard
-- Title pages with seasons, episodes and stream lists, for HTTP and debrid streams
+- Title pages with seasons, episodes and stream lists, for HTTP streams
 - Player with seeking, scrubber previews, audio track selection, embedded and add-on subtitles with delay and styling, and resume
 - An animated UI, with transitions between screens and optional sound effects
 - 4K output and HDR-to-SDR tone mapping (PS5)
@@ -48,7 +48,7 @@ PS4 and Wii U support is planned in the near future.
 </p>
 
 <p align="center">
-  <img src="docs/images/menu.gif" alt="Moving between the home screen, Discover, Library, Calendar, Add-ons and Settings" width="49%">
+  <img src="docs/images/menu.gif" alt="The player: seeking with scrub previews, and the subtitles menu" width="49%">
   <img src="docs/images/discover.png" alt="Discover, with a film chosen and its details beside the grid" width="49%">
 </p>
 

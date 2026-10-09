@@ -2,7 +2,7 @@
 # Builds the decode benchmark into a PS5 app folder. Run inside WSL as root, after
 # ps5/ffmpeg/build.sh. The clip to decode is added to the app folder's assets afterwards.
 set -euo pipefail
-REPO=${REPO:-/path/to/StremiBrew}
+REPO=${REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}
 WORK=${WORK:-/root/stremio}
 TEMPLATE=${TEMPLATE:-/root/eden/ps5-native-app-boilerplate}
 TITLE_ID=${TITLE_ID:-PPSA99702}

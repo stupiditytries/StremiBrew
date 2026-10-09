@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the web-view spike into a PS5 app folder. Run inside WSL as root.
 set -euo pipefail
-REPO=${REPO:-/path/to/StremiBrew}
+REPO=${REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}
 WORK=${WORK:-/root/stremio}
 TEMPLATE=${TEMPLATE:-/root/eden/ps5-native-app-boilerplate}
 TITLE_ID=${TITLE_ID:-PPSA99704}

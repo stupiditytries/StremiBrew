@@ -13,7 +13,9 @@ export PATH="$vs/Ninja:/c/Program Files/LLVM/bin:$PATH"
 cmake="$vs/CMake/bin/cmake.exe"
 build=$repo/build/preview
 
-glfw=${STREMIO_GLFW_DIR:-/path/to/glfw}
+# A GLFW source tree: STREMIO_GLFW_DIR, which .local/preview.env (not in git) may set.
+[[ -f $repo/.local/preview.env ]] && . "$repo/.local/preview.env"
+glfw=${STREMIO_GLFW_DIR:?set STREMIO_GLFW_DIR to a GLFW source tree}
 if [[ ! -f $build/build.ninja ]]; then
     "$cmake" -S "$repo/shared/ui" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \

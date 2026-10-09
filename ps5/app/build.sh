@@ -6,7 +6,7 @@
 #             the linker layout and the packaging tool
 #   GL_SDK    the PS5 OpenGL SDK's `sdk` folder (headers and static libraries)
 set -euo pipefail
-REPO=${REPO:-/path/to/StremiBrew}
+REPO=${REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}
 WORK=${WORK:-/root/stremio}
 TEMPLATE=${TEMPLATE:-/root/eden/ps5-native-app-boilerplate}
 GL_SDK=${GL_SDK:-/root/eden/edenfork/.deps/ps5-opengl-sdk-1.0.0/sdk}
