@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/stupiditytries/StremiBrew/build.yml?branch=main&label=build" alt="Build status"></a>
+  <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml/badge.svg?branch=main" alt="Build status"></a>
   <img src="https://img.shields.io/badge/Tokens%20Wasted-1%20Trillion%2B-blueviolet" alt="Tokens Wasted: 1 Trillion+">
 </p>
 
