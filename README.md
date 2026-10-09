@@ -56,7 +56,7 @@ PS4 and Wii U support is planned in the near future.
 
 <p align="center">
   <img src="docs/images/calendar.png" alt="The calendar of upcoming episodes" width="49%">
-  <img src="docs/images/search.png" alt="Search results" width="49%">
+  <img src="docs/images/settings.gif" alt="Settings: account, playback, subtitles, auto-calibrate and interface" width="49%">
 </p>
 
 ## Credits and disclaimers
