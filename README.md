@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml"><img src="https://github.com/stupiditytries/StremiBrew/actions/workflows/build.yml/badge.svg?branch=main" alt="Build status"></a>
-  <img src="https://img.shields.io/badge/Tokens%20Wasted-1%20Trillion%2B-blueviolet" alt="Tokens Wasted: 999 Trillion+">
+  <img src="https://img.shields.io/badge/Tokens%20Wasted-9%20Kazillion%2B-blueviolet" alt="Tokens Wasted: 9 Kazillion+">
 </p>
 
 <p align="center">
