@@ -24,6 +24,8 @@
 
 StremiBrew is a cross-platform, third-party Stremio client that aims to bring the native Stremio TV experience to consoles and builds on it with features only console hardware can handle.
 
+**To get it running on your console, see the [installation guide](INSTALLATION.md).** To build it yourself, see the [build guide](BUILD.md).
+
 The UI is inspired by my favourite elements of Stremio's official web-based TV interface and its Android TV app.
 
 It currently supports the **PS5** and **Switch**, with features including:
@@ -80,3 +82,5 @@ All contributions and support should go to the Stremio team, whose work this is 
 - **Torrents are not supported**: StremiBrew has no torrent client, and at this period of time I do not plan to add one. Torrent and magnet streams cannot be played and are marked as such; only direct HTTP and HTTPS streams play.
 - **Artwork**: Posters, logos and stills in the screenshots above belong to their owners and are shown only to demonstrate the app.
 - **Homebrew**: StremiBrew runs only on consoles that can already run homebrew. It contains no code from Sony or Nintendo and does nothing to enable piracy of games. Use it at your own risk: it comes with no warranty, as set out in the [license](LICENSE.md).
+
+I am not responsible or liable for any use of this app, for account or console bans, or for any other risk that comes with using it.
