@@ -85,7 +85,7 @@ aarch64-none-elf-g++ -specs="$dkp/libnx/switch.specs" -g "${arch[@]}" -Wl,-Map,"
 rm -rf "$out/romfs"
 mkdir -p "$out/romfs/fonts"
 cp "$ui"/assets/fonts/*.ttf "$out/romfs/fonts/"
-nacptool --create "StremiBrew" "stupiditytries" "0.1.0" "$out/StremiBrew.nacp"
+nacptool --create "StremiBrew" "stupiditytries" "1.0.0" "$out/StremiBrew.nacp"
 elf2nro "$out/StremiBrew.elf" "$out/StremiBrew.nro" --icon="$repo/switch/icon.jpg" \
     --nacp="$out/StremiBrew.nacp" --romfsdir="$out/romfs"
 ls -la "$out/StremiBrew.nro"
